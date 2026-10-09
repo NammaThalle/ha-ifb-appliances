@@ -1,0 +1,58 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "IFB Appliances",
+        "description": "Connect your My IFB account. If you log in with OTP on the My IFB app, select 'Mobile Number (SMS OTP Verification)'.",
+        "data": {
+          "auth_type": "Authentication Method",
+          "phone": "Mobile Number (or Email for password login)",
+          "calling_code": "Country Calling Code (e.g. +91)",
+          "password": "Password (Optional - only if using password method)",
+          "token": "Direct Bearer Auth Token (Optional)",
+          "user_id": "User / Customer ID (Optional)"
+        }
+      },
+      "otp": {
+        "title": "Verify SMS OTP",
+        "description": "An SMS with an OTP has been sent to {phone}. Please enter the OTP to complete login.",
+        "data": {
+          "otp": "SMS OTP Code"
+        }
+      },
+      "manual_mac": {
+        "title": "Link Your IFB Washer",
+        "description": "No appliances were automatically returned by your IFB cloud profile. Please enter your washer's MAC address (found on the barcode sticker on the machine or in your Wi-Fi router's client list):",
+        "data": {
+          "mac": "Washer MAC Address (e.g. 48:9D:31:XX:XX:XX)",
+          "device_name": "Appliance Friendly Name"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to IFB Cloud API. Please check your internet connection.",
+      "invalid_auth": "Authentication failed. Please verify your credentials.",
+      "invalid_otp": "Invalid or expired OTP. Please verify the code and try again.",
+      "invalid_mac": "Invalid MAC address format. Please enter a valid 12-character hex MAC address (e.g. AA:BB:CC:DD:EE:FF).",
+      "phone_required": "Please provide a valid registered mobile number.",
+      "phone_format": "Please enter a valid 10-digit mobile number without spaces or special characters.",
+      "no_devices": "No IFB appliances found in this account.",
+      "unknown": "Unexpected error occurred during authentication."
+    },
+    "abort": {
+      "already_configured": "This IFB Cloud account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "IFB Washer Cloud Settings",
+        "description": "Update appliance configuration:",
+        "data": {
+          "mac": "Washer MAC Address (e.g. 48:9D:31:XX:XX:XX)",
+          "device_name": "Appliance Friendly Name"
+        }
+      }
+    }
+  }
+}
