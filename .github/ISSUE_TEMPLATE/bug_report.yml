@@ -1,0 +1,43 @@
+name: Bug Report
+description: Report an issue or unexpected behavior in the IFB Washer Cloud integration
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue!
+        **Important**: Never include full bearer tokens, passwords, or personal mobile numbers in issue logs.
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant Version
+      placeholder: "e.g. 2024.10.1"
+    validations:
+      required: true
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration Version
+      placeholder: "e.g. 1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: washer_model
+    attributes:
+      label: IFB Washer Model
+      placeholder: "e.g. Executive Plus ZBG 11/7/3"
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Log Output
+      description: Logs from Home Assistant (`home-assistant.log`) with sensitive information sanitized.
+      render: shell
