@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icon.png" alt="IFB Appliances Logo" width="160" height="160">
+  <img src="https://raw.githubusercontent.com/NammaThalle/ha-ifb-appliances/main/icon.png" alt="IFB Appliances Logo" width="160" height="160">
 </p>
 
 # IFB Appliances Integration for Home Assistant
