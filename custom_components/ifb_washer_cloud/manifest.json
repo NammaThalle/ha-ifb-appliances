@@ -1,0 +1,11 @@
+{
+  "domain": "ifb_washer_cloud",
+  "name": "IFB Appliances",
+  "codeowners": ["@NammaThalle"],
+  "config_flow": true,
+  "documentation": "https://github.com/NammaThalle/ha-ifb-appliances",
+  "integration_type": "device",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/NammaThalle/ha-ifb-appliances/issues",
+  "version": "1.0.0"
+}
