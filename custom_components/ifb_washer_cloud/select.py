@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Optional
 
 from homeassistant.components.select import SelectEntity
@@ -15,11 +16,15 @@ from .const import DOMAIN
 from .coordinator import IfbWasherCoordinator
 
 try:
+    from .ifb_cloud.client import IfbCloudClient
     from .ifb_cloud.const import DRY_MODES, PROGRAM_NAMES, SPIN_SPEEDS, TEMPERATURES
     from .ifb_cloud.models import IfbCycleProgress, IfbDevice
 except ImportError:
+    from ifb_cloud.client import IfbCloudClient
     from ifb_cloud.const import DRY_MODES, PROGRAM_NAMES, SPIN_SPEEDS, TEMPERATURES
     from ifb_cloud.models import IfbCycleProgress, IfbDevice
+
+_LOGGER = logging.getLogger(__name__)
 
 PROG_NAME_TO_CODE = {v: k for k, v in PROGRAM_NAMES.items()}
 DRY_MODE_TO_CODE = {v: k for k, v in DRY_MODES.items()}
@@ -35,6 +40,7 @@ async def async_setup_entry(
     """Set up IFB Washer select entities from config entry."""
     entry_data = hass.data[DOMAIN][entry.entry_id]
     coordinator: IfbWasherCoordinator = entry_data["coordinator"]
+    client: IfbCloudClient = entry_data["client"]
     devices: Dict[str, IfbDevice] = entry_data["devices"]
     settings: Dict[str, Dict[str, int]] = entry_data["settings"]
 
@@ -43,10 +49,10 @@ async def async_setup_entry(
         dev_settings = settings[mac]
         entities.extend(
             [
-                IfbProgramSelect(coordinator, device, dev_settings),
-                IfbSpinSpeedSelect(coordinator, device, dev_settings),
-                IfbTemperatureSelect(coordinator, device, dev_settings),
-                IfbDryModeSelect(coordinator, device, dev_settings),
+                IfbProgramSelect(coordinator, client, device, dev_settings),
+                IfbSpinSpeedSelect(coordinator, client, device, dev_settings),
+                IfbTemperatureSelect(coordinator, client, device, dev_settings),
+                IfbDryModeSelect(coordinator, client, device, dev_settings),
             ]
         )
 
@@ -59,11 +65,13 @@ class IfbBaseSelect(CoordinatorEntity[IfbWasherCoordinator], SelectEntity):
     def __init__(
         self,
         coordinator: IfbWasherCoordinator,
+        client: IfbCloudClient,
         device: IfbDevice,
         settings: Dict[str, int],
     ) -> None:
         """Initialize select entity."""
         super().__init__(coordinator)
+        self.client = client
         self.device = device
         self.mac = device.mac
         self.settings = settings
@@ -94,10 +102,11 @@ class IfbProgramSelect(IfbBaseSelect):
     def __init__(
         self,
         coordinator: IfbWasherCoordinator,
+        client: IfbCloudClient,
         device: IfbDevice,
         settings: Dict[str, int],
     ) -> None:
-        super().__init__(coordinator, device, settings)
+        super().__init__(coordinator, client, device, settings)
         self._attr_name = f"{device.name} Program"
         self._attr_unique_id = f"{device.mac}_program_select"
         self._attr_options = list(PROGRAM_NAMES.values())
@@ -112,8 +121,21 @@ class IfbProgramSelect(IfbBaseSelect):
     async def async_select_option(self, option: str) -> None:
         """Change selected program."""
         if option in PROG_NAME_TO_CODE:
-            self.settings["program"] = PROG_NAME_TO_CODE[option]
+            code = PROG_NAME_TO_CODE[option]
+            self.settings["program"] = code
             self.async_write_ha_state()
+
+            if not (self.progress and self.progress.is_running):
+                try:
+                    await self.client.configure_cycle(
+                        self.mac,
+                        program=code,
+                        temp=self.settings.get("temp", 3),
+                        spin=self.settings.get("spin", 4),
+                        serial=self.device.serial_number,
+                    )
+                except Exception as err:
+                    _LOGGER.debug("Could not sync program selection to washer %s: %s", self.mac, err)
 
 
 class IfbSpinSpeedSelect(IfbBaseSelect):
@@ -124,10 +146,11 @@ class IfbSpinSpeedSelect(IfbBaseSelect):
     def __init__(
         self,
         coordinator: IfbWasherCoordinator,
+        client: IfbCloudClient,
         device: IfbDevice,
         settings: Dict[str, int],
     ) -> None:
-        super().__init__(coordinator, device, settings)
+        super().__init__(coordinator, client, device, settings)
         self._attr_name = f"{device.name} Spin Speed"
         self._attr_unique_id = f"{device.mac}_spin_select"
         self._attr_options = list(SPIN_SPEEDS)
@@ -144,8 +167,21 @@ class IfbSpinSpeedSelect(IfbBaseSelect):
     async def async_select_option(self, option: str) -> None:
         """Change selected spin speed."""
         if option in SPIN_NAME_TO_CODE:
-            self.settings["spin"] = SPIN_NAME_TO_CODE[option]
+            spin_code = SPIN_NAME_TO_CODE[option]
+            self.settings["spin"] = spin_code
             self.async_write_ha_state()
+
+            if not (self.progress and self.progress.is_running):
+                try:
+                    await self.client.configure_cycle(
+                        self.mac,
+                        program=self.settings.get("program", 1),
+                        temp=self.settings.get("temp", 3),
+                        spin=spin_code,
+                        serial=self.device.serial_number,
+                    )
+                except Exception as err:
+                    _LOGGER.debug("Could not sync spin speed to washer %s: %s", self.mac, err)
 
 
 class IfbTemperatureSelect(IfbBaseSelect):
@@ -156,10 +192,11 @@ class IfbTemperatureSelect(IfbBaseSelect):
     def __init__(
         self,
         coordinator: IfbWasherCoordinator,
+        client: IfbCloudClient,
         device: IfbDevice,
         settings: Dict[str, int],
     ) -> None:
-        super().__init__(coordinator, device, settings)
+        super().__init__(coordinator, client, device, settings)
         self._attr_name = f"{device.name} Temperature"
         self._attr_unique_id = f"{device.mac}_temp_select"
         self._attr_options = list(TEMPERATURES)
@@ -176,8 +213,21 @@ class IfbTemperatureSelect(IfbBaseSelect):
     async def async_select_option(self, option: str) -> None:
         """Change selected temperature."""
         if option in TEMP_NAME_TO_CODE:
-            self.settings["temp"] = TEMP_NAME_TO_CODE[option]
+            temp_code = TEMP_NAME_TO_CODE[option]
+            self.settings["temp"] = temp_code
             self.async_write_ha_state()
+
+            if not (self.progress and self.progress.is_running):
+                try:
+                    await self.client.configure_cycle(
+                        self.mac,
+                        program=self.settings.get("program", 1),
+                        temp=temp_code,
+                        spin=self.settings.get("spin", 4),
+                        serial=self.device.serial_number,
+                    )
+                except Exception as err:
+                    _LOGGER.debug("Could not sync temperature to washer %s: %s", self.mac, err)
 
 
 class IfbDryModeSelect(IfbBaseSelect):
@@ -188,10 +238,11 @@ class IfbDryModeSelect(IfbBaseSelect):
     def __init__(
         self,
         coordinator: IfbWasherCoordinator,
+        client: IfbCloudClient,
         device: IfbDevice,
         settings: Dict[str, int],
     ) -> None:
-        super().__init__(coordinator, device, settings)
+        super().__init__(coordinator, client, device, settings)
         self._attr_name = f"{device.name} Dry Mode"
         self._attr_unique_id = f"{device.mac}_dry_select"
         self._attr_options = list(DRY_MODES.values())

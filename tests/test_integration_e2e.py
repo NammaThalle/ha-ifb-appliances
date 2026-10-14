@@ -68,6 +68,7 @@ class TestIfbIntegrationE2E(unittest.IsolatedAsyncioTestCase):
             hardware_type="esp",
         )
         mock_client.get_all_devices = AsyncMock(return_value=[test_device])
+        mock_client.fetch_mqtt_client_id = AsyncMock(return_value="mock-uuid-client-id")
         mock_client.get_device_progress = AsyncMock(
             return_value=IfbCycleProgress(
                 mac="aa:bb:cc:dd:ee:ff",
@@ -119,6 +120,7 @@ class TestIfbIntegrationE2E(unittest.IsolatedAsyncioTestCase):
             hardware_type="esp",
         )
         mock_client.get_all_devices = AsyncMock(return_value=[test_device])
+        mock_client.fetch_mqtt_client_id = AsyncMock(return_value="mock-uuid-client-id")
         mock_client.send_command = AsyncMock(return_value={"status": "sent"})
         mock_client_cls.return_value = mock_client
 
