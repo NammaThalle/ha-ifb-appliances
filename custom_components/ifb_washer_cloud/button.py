@@ -18,9 +18,11 @@ from .coordinator import IfbWasherCoordinator
 
 try:
     from .ifb_cloud.client import IfbCloudClient, IfbError
+    from .ifb_cloud.const import MachineState
     from .ifb_cloud.models import IfbCycleProgress, IfbDevice
 except ImportError:
     from ifb_cloud.client import IfbCloudClient, IfbError
+    from ifb_cloud.const import MachineState
     from ifb_cloud.models import IfbCycleProgress, IfbDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -109,17 +111,33 @@ class IfbStartButton(IfbBaseButton):
         temp = self.settings.get("temp", 3)
         spin = self.settings.get("spin", 4)
         dry = self.settings.get("dry", 0)
+        is_paused = bool(
+            self.progress
+            and (
+                getattr(self.progress, "is_paused", False)
+                or getattr(self.progress, "state", None) == MachineState.PAUSED
+            )
+        )
 
-        _LOGGER.info(
-            "Sending Start command to %s (program=%s, temp=%s, spin=%s, dry=%s)",
+        _LOGGER.warning(
+            "Sending Start command to %s (program=%s, temp_idx=%s, spin_idx=%s, dry=%s, is_paused=%s)",
             self.mac,
             program,
             temp,
             spin,
             dry,
+            is_paused,
         )
         try:
-            await self.client.start(self.mac, program=program, temp=temp, spin=spin, dry=dry)
+            await self.client.start(
+                self.mac,
+                program=program,
+                temp=temp,
+                spin=spin,
+                dry=dry,
+                serial=self.device.serial_number,
+                resume_only=is_paused,
+            )
             await self.coordinator.async_request_refresh()
         except IfbError as err:
             raise HomeAssistantError(f"Failed to start IFB washer: {err}") from err
@@ -142,9 +160,9 @@ class IfbPauseButton(IfbBaseButton):
 
     async def async_press(self) -> None:
         """Handle button press."""
-        _LOGGER.info("Sending Pause command to %s", self.mac)
+        _LOGGER.warning("Sending Pause command to %s", self.mac)
         try:
-            await self.client.pause(self.mac)
+            await self.client.pause(self.mac, serial=self.device.serial_number)
             await self.coordinator.async_request_refresh()
         except IfbError as err:
             raise HomeAssistantError(f"Failed to pause IFB washer: {err}") from err
@@ -167,9 +185,9 @@ class IfbCancelButton(IfbBaseButton):
 
     async def async_press(self) -> None:
         """Handle button press."""
-        _LOGGER.info("Sending Cancel command to %s", self.mac)
+        _LOGGER.warning("Sending Cancel command to %s", self.mac)
         try:
-            await self.client.cancel(self.mac)
+            await self.client.cancel(self.mac, serial=self.device.serial_number)
             await self.coordinator.async_request_refresh()
         except IfbError as err:
             raise HomeAssistantError(f"Failed to stop/cancel IFB washer: {err}") from err

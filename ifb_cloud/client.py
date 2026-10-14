@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import aiohttp
 
@@ -26,12 +27,17 @@ from .const import (
     ENDPOINT_GET_DEVICE_STATUS,
     ENDPOINT_GET_MODEL_SPECIFICATIONS,
     ENDPOINT_GET_MQTT_CLIENT,
+    ENDPOINT_GET_RESPONSE,
     ENDPOINT_SEND_COMMAND,
     GRAPHQL_AUTH_URL,
     MAGENTO_BASE_URL,
     MachineState,
+    MQTT_ESP_HOST,
+    MQTT_ESP_PORT,
+    MQTT_GAINSPAN_HOST,
+    MQTT_GAINSPAN_PORT,
 )
-from .frame import IfbFrameBuilder
+from .frame import IfbFrameBuilder, decode_frame
 from .models import IfbCycleProgress, IfbDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,16 +65,24 @@ class IfbCloudClient:
     def __init__(
         self,
         token: Optional[str] = None,
+        cloud_token: Optional[str] = None,
+        mqtt_client_id: Optional[str] = None,
         user_id: Optional[str] = None,
         session: Optional[aiohttp.ClientSession] = None,
         base_url: str = API_V4_BASE_URL,
     ) -> None:
         """Initialize the IFB Cloud client."""
         self._token: Optional[str] = token
+        self._cloud_token: Optional[str] = cloud_token
+        # mqtt_client_id is the server-assigned UUID from mapping/client endpoint.
+        # It is NOT the MAC address — using the MAC as client_id causes a
+        # "client ID collision" that kicks the physical washer offline.
+        self._mqtt_client_id: Optional[str] = mqtt_client_id
         self._user_id: Optional[str] = user_id
         self._session: Optional[aiohttp.ClientSession] = session
         self._own_session: bool = session is None
         self._base_url: str = base_url.rstrip("/")
+        self._device_serials: Dict[str, str] = {}
 
     @property
     def token(self) -> Optional[str]:
@@ -79,6 +93,11 @@ class IfbCloudClient:
     def user_id(self) -> Optional[str]:
         """Return the active user identifier."""
         return self._user_id
+
+    @property
+    def mqtt_client_id(self) -> Optional[str]:
+        """Return the server-assigned MQTT client ID."""
+        return self._mqtt_client_id
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create the aiohttp ClientSession."""
@@ -294,7 +313,7 @@ class IfbCloudClient:
                 # Extract token and user identifier
                 token = data.get("token") or data.get("authToken") or data.get("data", {}).get("token")
                 user_id = data.get("userId") or data.get("customerId") or data.get("data", {}).get("userId")
-                
+
                 if not token:
                     raise IfbAuthError("Login succeeded but no token received in payload")
 
@@ -306,6 +325,51 @@ class IfbCloudClient:
             raise IfbConnectionError("Timeout while contacting authentication service") from err
         except aiohttp.ClientError as err:
             raise IfbConnectionError(f"Network error during login: {err}") from err
+
+    async def fetch_mqtt_client_id(self) -> Optional[str]:
+        """Fetch a server-assigned MQTT client ID from the mapping/client endpoint.
+
+        The app (AppliancesFragment.checkAndGenerateMqttClientId) calls POST
+        /api/v4/mapping/client with just the Bearer token — no body.  The server
+        returns:
+            { "status": true, "statusCode": 200, "message": "...",
+              "data": { "clientID": "<uuid-string>" } }
+
+        Using this UUID as the MQTT client_id avoids colliding with the
+        washer's own connection (which uses the MAC as its client_id).
+        """
+        if not self._token:
+            return None
+        try:
+            session = await self._get_session()
+            url = f"{self._base_url}/{ENDPOINT_GET_MQTT_CLIENT}"
+            headers = {
+                **DEFAULT_HEADERS,
+                "Authorization": f"Bearer {self._token}",
+            }
+            async with session.post(
+                url,
+                headers=headers,
+                json={},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status not in (200, 201):
+                    _LOGGER.debug("mapping/client returned HTTP %s", resp.status)
+                    return None
+                data = await resp.json()
+                client_id = (
+                    data.get("data", {}).get("clientID")
+                    or data.get("data", {}).get("clientId")
+                    or data.get("clientID")
+                    or data.get("clientId")
+                )
+                if client_id:
+                    self._mqtt_client_id = str(client_id)
+                    _LOGGER.debug("Fetched server-assigned MQTT client_id: %s", self._mqtt_client_id)
+                return self._mqtt_client_id
+        except Exception as err:
+            _LOGGER.debug("Could not fetch MQTT client ID: %s", err)
+            return None
 
     async def _post_api(self, endpoint: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Send authenticated POST request to API v4."""
@@ -349,6 +413,7 @@ class IfbCloudClient:
         self,
         fallback_mac: Optional[str] = None,
         fallback_name: Optional[str] = None,
+        fallback_serial: Optional[str] = None,
     ) -> List[IfbDevice]:
         """Fetch all registered appliances for the account."""
         if not self._token:
@@ -356,6 +421,7 @@ class IfbCloudClient:
 
         session = await self._get_session()
         device_list: List[IfbDevice] = []
+        products: list[dict[str, Any]] = []
 
         # 1. Query GraphQL getRegisterAppliances if token is available
         if self._token:
@@ -414,6 +480,8 @@ class IfbCloudClient:
                                 if is_wifi or "washer" in name.lower() or "washer" in model.lower() or "laundry" in cat_str:
                                     dev_mac = str(p.get("mac") or p.get("wifi_mac") or p.get("macAddress") or fallback_mac or s_no or "").strip().lower()
                                     if dev_mac:
+                                        if s_no:
+                                            self._device_serials[dev_mac] = str(s_no)
                                         device_list.append(
                                             IfbDevice(
                                                 mac=dev_mac,
@@ -438,20 +506,29 @@ class IfbCloudClient:
                 if isinstance(raw_devices, list):
                     for d in raw_devices:
                         if isinstance(d, dict):
-                            device_list.append(IfbDevice.from_api_dict(d))
+                            dev = IfbDevice.from_api_dict(d)
+                            if dev.serial_number:
+                                self._device_serials[dev.mac] = dev.serial_number
+                            device_list.append(dev)
             except Exception as err:
                 _LOGGER.debug("Legacy getAllDevices error: %s", err)
 
         # 3. If cloud does not list IoT appliances but user configured a MAC address, link it
         if not device_list and fallback_mac:
             clean_mac = fallback_mac.strip().lower()
+            first_serial = next(
+                (str(p.get("serial_no")) for p in products if isinstance(p, dict) and p.get("serial_no")),
+                fallback_serial,
+            )
+            if first_serial:
+                self._device_serials[clean_mac] = first_serial
             device_list.append(
                 IfbDevice(
                     mac=clean_mac,
                     name=fallback_name or "IFB Washer Dryer",
                     model_name="IFB Appliance",
                     device_id=clean_mac,
-                    serial_number=clean_mac,
+                    serial_number=first_serial or clean_mac,
                     category="Washer Dryer",
                     is_online=True,
                     hardware_type="esp",
@@ -462,18 +539,63 @@ class IfbCloudClient:
         return device_list
 
     async def get_device_progress(self, mac: str) -> IfbCycleProgress:
-        """Fetch current telemetry and cycle progress for appliance."""
+        """Fetch current telemetry for appliance.
+
+        The primary path is POST /getResponse which returns the last binary
+        telemetry frame the washer published to the cloud broker.  This is
+        decoded using the exact byte layout from MachineState.java.
+
+        Falls back to POST /getUserDeviceProgress (legacy JSON) if the binary
+        endpoint fails or returns no data.
+        """
         clean_mac = mac.strip().lower()
         if not MAC_REGEX.match(clean_mac):
             _LOGGER.debug("Invalid MAC address syntax: %s", mac)
             return IfbCycleProgress(mac=clean_mac, is_running=False, state=MachineState.STANDBY)
+
+        # --- Primary: binary frame via getResponse ---
+        try:
+            resp = await self._post_api(ENDPOINT_GET_RESPONSE, {"mac": clean_mac})
+            raw_data = resp.get("data") or {}
+            response_field = raw_data.get("response")
+            if response_field:
+                # The API may return the binary payload as a base64 string or
+                # as a JSON array of integers (both seen in practice).
+                frame_bytes: Optional[bytes] = None
+                if isinstance(response_field, (list, tuple)):
+                    frame_bytes = bytes(int(b) & 0xFF for b in response_field)
+                elif isinstance(response_field, str):
+                    try:
+                        frame_bytes = base64.b64decode(response_field)
+                    except Exception:
+                        pass
+                elif isinstance(response_field, bytes):
+                    frame_bytes = response_field
+
+                if frame_bytes:
+                    decoded = decode_frame(frame_bytes)
+                    if decoded is not None:
+                        return IfbCycleProgress.from_decoded_frame(clean_mac, decoded)
+                    else:
+                        _LOGGER.debug(
+                            "Binary frame decode failed for %s (len=%d, b0=0x%02x)",
+                            clean_mac, len(frame_bytes), frame_bytes[0] if frame_bytes else 0,
+                        )
+        except Exception as err:
+            _LOGGER.debug("getResponse binary path failed for %s: %s", clean_mac, err)
+
+        # --- Fallback: legacy getUserDeviceProgress JSON ---
         try:
             resp = await self._post_api(ENDPOINT_GET_DEVICE_PROGRESS, {"mac": clean_mac})
             progress_data = resp.get("data") or resp.get("progress") or resp
-            return IfbCycleProgress.from_api_dict(clean_mac, progress_data)
+            if isinstance(progress_data, list) and progress_data:
+                progress_data = progress_data[0]
+            if isinstance(progress_data, dict):
+                return IfbCycleProgress.from_api_dict(clean_mac, progress_data)
         except Exception as err:
-            _LOGGER.debug("Could not fetch device progress from cloud for %s: %s", clean_mac, err)
-            return IfbCycleProgress(mac=clean_mac, is_running=False, state=MachineState.STANDBY)
+            _LOGGER.debug("getUserDeviceProgress fallback failed for %s: %s", clean_mac, err)
+
+        return IfbCycleProgress(mac=clean_mac, is_running=False, state=MachineState.STANDBY)
 
     async def get_device_status(self, mac: str) -> Dict[str, Any]:
         """Check live connectivity status of appliance."""
@@ -490,28 +612,245 @@ class IfbCloudClient:
         """Fetch programs and hardware limits catalog for model."""
         return await self._post_api(ENDPOINT_GET_MODEL_SPECIFICATIONS, {"model": model_name})
 
-    async def send_command(self, mac: str, command_bytes: bytes) -> Dict[str, Any]:
-        """Transmit binary control frame to appliance via cloud MQTT bridge."""
+    def _resolve_mqtt_credentials(self, clean_mac: str) -> tuple[str, str, str]:
+        """Return (client_id, username, password) for MQTT connection.
+
+        From decompiled app (MainActivity.makeMqttConnection):
+          - client_id = server-assigned UUID from mapping/client (stored as mqtt_clientId
+            in SharedPreferences).  NEVER the MAC — using MAC causes a client-ID collision
+            that evicts the physical washer from the broker.
+          - username  = device serial number (str2 = deviceDetail.getSerial())
+          - password  = authToken (Bearer token)
+
+        If no server-assigned client_id is available yet, we generate a safe
+        fallback that still avoids collision by prefixing with "HA_" so the broker
+        policy (which only grants the MAC's own client_id to the washer) does not
+        kick our connection.
+        """
+        # Client ID: server-assigned UUID, or safe fallback
+        if self._mqtt_client_id:
+            client_id = self._mqtt_client_id
+        else:
+            # Fallback: use a stable but non-MAC identifier so we don't collide
+            import hashlib
+            h = hashlib.md5((self._user_id or clean_mac).encode()).hexdigest()[:12]
+            client_id = f"HA_{h}"
+            _LOGGER.warning(
+                "No server-assigned MQTT client_id available for %s. "
+                "Using fallback '%s'. Call fetch_mqtt_client_id() first for reliable operation.",
+                clean_mac, client_id,
+            )
+
+        # Username: serial number (confirmed from Washscreenfragment.attemptReConnection)
+        username = self._device_serials.get(clean_mac) or clean_mac
+
+        # Password: Bearer token
+        password = self._cloud_token or self._token or ""
+
+        return client_id, username, password
+
+    async def send_command(
+        self,
+        mac: str,
+        command_bytes: Union[bytes, List[bytes]],
+        serial: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Transmit binary control frame(s) to appliance via cloud MQTT broker.
+
+        Uses a transient connection with the correct credentials:
+          client_id = server-assigned UUID (not MAC)
+          username  = device serial number (not MAC)
+          password  = Bearer token
+        """
         clean_mac = mac.strip().lower()
         if not MAC_REGEX.match(clean_mac):
             raise IfbApiError(f"Invalid MAC address format: {mac}")
-        payload = {
-            "mac": clean_mac,
-            "message": list(command_bytes),
-        }
-        return await self._post_api(ENDPOINT_SEND_COMMAND, payload)
 
-    async def start(self, mac: str, program: int = 1, temp: int = 2, spin: int = 4, dry: int = 0) -> Dict[str, Any]:
-        """Send Start cycle command."""
-        frame = IfbFrameBuilder.start(program=program, temp=temp, spin=spin, dry=dry)
-        return await self.send_command(mac, frame)
+        # Cache serial if explicitly provided
+        if serial:
+            self._device_serials[clean_mac] = serial
 
-    async def pause(self, mac: str) -> Dict[str, Any]:
+        def _publish_mqtt() -> Dict[str, Any]:
+            import ssl
+            import time
+            import paho.mqtt.client as mqtt
+
+            client_id, username, password = self._resolve_mqtt_credentials(clean_mac)
+
+            # Determine broker based on hardware type (firmware version prefix)
+            # GainSpan (older) → mqtt2:8883; ESP32 (newer) → mqttesp:8887
+            device = None  # IfbDevice not accessible here; use MAC OUI heuristic
+            mac_oui = clean_mac[:8].lower()
+            if mac_oui == "20:f8:5e":  # GainSpan OUI
+                endpoints = [(MQTT_GAINSPAN_HOST, MQTT_GAINSPAN_PORT)]
+            else:
+                endpoints = [(MQTT_ESP_HOST, MQTT_ESP_PORT), (MQTT_GAINSPAN_HOST, MQTT_GAINSPAN_PORT)]
+
+            frames = command_bytes if isinstance(command_bytes, list) else [command_bytes]
+            total_bytes = sum(len(f) for f in frames)
+
+            last_err = None
+            for host, port in endpoints:
+                client = None
+                try:
+                    try:
+                        client = mqtt.Client(
+                            mqtt.CallbackAPIVersion.VERSION2,
+                            client_id=client_id,
+                        )
+                    except Exception:
+                        client = mqtt.Client(client_id=client_id)
+
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                    client.tls_set_context(ctx)
+                    client.username_pw_set(username, password)
+
+                    connected = [False]
+                    published = [False]
+                    conn_rc = [None]
+                    topic_lower = f"Command/{clean_mac}"
+                    topic_upper = f"Command/{clean_mac.upper()}"
+                    resp_lower = f"Response/{clean_mac}"
+                    resp_upper = f"Response/{clean_mac.upper()}"
+
+                    def on_connect(c, userdata, flags, rc, props=None):
+                        conn_rc[0] = rc
+                        if (hasattr(rc, "is_failure") and not rc.is_failure) or rc == 0:
+                            connected[0] = True
+                            try:
+                                c.subscribe(resp_lower, qos=1)
+                                c.subscribe(resp_upper, qos=1)
+                            except Exception as sub_err:
+                                _LOGGER.debug("Could not subscribe to Response topics: %s", sub_err)
+                            for f_idx, frame in enumerate(frames):
+                                _LOGGER.warning(
+                                    "[IFB Cloud] Connected to %s:%s (client_id=%s, user=%s). "
+                                    "Publishing frame %d/%d (%d bytes, qos=1) to %s & %s: %s",
+                                    host, port, client_id, username,
+                                    f_idx + 1, len(frames), len(frame),
+                                    topic_lower, topic_upper, list(frame),
+                                )
+                                c.publish(topic_lower, frame, qos=1, retain=False)
+                                c.publish(topic_upper, frame, qos=1, retain=False)
+                                if f_idx < len(frames) - 1:
+                                    time.sleep(0.5)
+                            published[0] = True
+
+                    client.on_connect = on_connect
+
+                    _LOGGER.debug(
+                        "Connecting to IFB MQTT %s:%s (client_id=%s, user=%s)",
+                        host, port, client_id, username,
+                    )
+                    client.connect(host, port, keepalive=30)
+                    client.loop_start()
+
+                    wait_timeout = 5.0 + len(frames) * 1.0
+                    start_t = time.time()
+                    while time.time() - start_t < wait_timeout:
+                        if published[0] or (conn_rc[0] is not None and conn_rc[0] != 0):
+                            break
+                        time.sleep(0.1)
+
+                    time.sleep(0.5)
+                    client.loop_stop()
+                    client.disconnect()
+
+                    if not connected[0] or not published[0]:
+                        last_err = f"Failed to publish on {host}:{port}: conn_rc={conn_rc[0]}"
+                        continue
+
+                    return {
+                        "status": "success",
+                        "broker": f"{host}:{port}",
+                        "topic": topic_lower,
+                        "bytes": total_bytes,
+                        "frames": len(frames),
+                    }
+                except Exception as ex:
+                    last_err = str(ex)
+                    _LOGGER.warning("MQTT transmission error on %s:%s: %s", host, port, ex)
+                    if client is not None:
+                        try:
+                            client.loop_stop()
+                            client.disconnect()
+                        except Exception:
+                            pass
+                    continue
+
+            raise IfbApiError(f"Failed to transmit command via IFB MQTT: {last_err}")
+
+        return await asyncio.to_thread(_publish_mqtt)
+
+    async def start(
+        self,
+        mac: str,
+        program: int = 1,
+        temp: int = 40,
+        spin: int = 1000,
+        dry: int = 0,
+        serial: Optional[str] = None,
+        resume_only: bool = False,
+    ) -> Dict[str, Any]:
+        """Send Start / Resume cycle command.
+
+        If resume_only is True (machine paused mid-cycle), sends only CMD_START (12 bytes).
+        Otherwise, sends 21-byte cycle setup frame (program, temp, spin) followed by CMD_START.
+        """
+        start_frame = IfbFrameBuilder.start()
+        if resume_only:
+            return await self.send_command(mac, start_frame, serial=serial)
+
+        # Map dropdown index to actual RPM / Temp if passed as dropdown index
+        temp_table = [0, 20, 30, 40, 60, 95]
+        real_temp = temp_table[temp] if 0 <= temp < len(temp_table) and temp < 10 else temp
+
+        spin_table = [0, 400, 600, 800, 1000, 1200, 1400]
+        real_spin = spin_table[spin] if 0 <= spin < len(spin_table) and spin < 10 else spin
+
+        cycle_frame = IfbFrameBuilder.build_cycle_frame(
+            program=program, temp=real_temp, spin=real_spin
+        )
+        return await self.send_command(mac, [cycle_frame, start_frame], serial=serial)
+
+    async def configure_cycle(
+        self,
+        mac: str,
+        program: int = 1,
+        temp: int = 40,
+        spin: int = 1000,
+        serial: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Send 21-byte program/cycle setup frame without starting."""
+        temp_table = [0, 20, 30, 40, 60, 95]
+        real_temp = temp_table[temp] if 0 <= temp < len(temp_table) and temp < 10 else temp
+
+        spin_table = [0, 400, 600, 800, 1000, 1200, 1400]
+        real_spin = spin_table[spin] if 0 <= spin < len(spin_table) and spin < 10 else spin
+
+        cycle_frame = IfbFrameBuilder.build_cycle_frame(
+            program=program, temp=real_temp, spin=real_spin
+        )
+        return await self.send_command(mac, cycle_frame, serial=serial)
+
+    async def pause(self, mac: str, serial: Optional[str] = None) -> Dict[str, Any]:
         """Send Pause cycle command."""
         frame = IfbFrameBuilder.pause()
-        return await self.send_command(mac, frame)
+        return await self.send_command(mac, frame, serial=serial)
 
-    async def cancel(self, mac: str) -> Dict[str, Any]:
+    async def cancel(self, mac: str, serial: Optional[str] = None) -> Dict[str, Any]:
         """Send Cancel / Off command."""
         frame = IfbFrameBuilder.cancel()
-        return await self.send_command(mac, frame)
+        return await self.send_command(mac, frame, serial=serial)
+
+    async def turn_on(self, mac: str, serial: Optional[str] = None) -> Dict[str, Any]:
+        """Send Power On command."""
+        frame = IfbFrameBuilder.turn_on()
+        return await self.send_command(mac, frame, serial=serial)
+
+    async def turn_off(self, mac: str, serial: Optional[str] = None) -> Dict[str, Any]:
+        """Send Power Off command."""
+        frame = IfbFrameBuilder.turn_off()
+        return await self.send_command(mac, frame, serial=serial)

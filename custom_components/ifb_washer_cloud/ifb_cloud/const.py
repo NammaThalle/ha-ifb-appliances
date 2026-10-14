@@ -16,9 +16,14 @@ MQTT_GAINSPAN_PORT = 8883
 # REST Endpoints (appended to API_V4_BASE_URL)
 ENDPOINT_GET_ALL_DEVICES = "getAllDevices"
 ENDPOINT_GET_DEVICE_PROGRESS = "getUserDeviceProgress"
+# getResponse: returns the last binary telemetry frame the washer published.
+# Response: { "data": { "mac": "...", "response": <bytes|base64|int[]>, "responseStatus": "..." } }
+ENDPOINT_GET_RESPONSE = "getResponse"
 ENDPOINT_GET_DEVICE_STATUS = "deviceStatus"
 ENDPOINT_GET_DEVICE_META = "getDeviceMeta"
 ENDPOINT_GET_MODEL_SPECIFICATIONS = "getModelSpecifications"
+# mapping/client: returns a server-assigned MQTT client UUID (no body needed).
+# Schema: { "data": { "clientID": "<uuid>" }, "status": true, "statusCode": 200 }
 ENDPOINT_GET_MQTT_CLIENT = "mapping/client"
 ENDPOINT_SEND_COMMAND = "sendCommand"
 ENDPOINT_CONNECT = "connect"

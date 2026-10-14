@@ -37,8 +37,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = async_get_clientsession(hass)
     token = entry.data.get(CONF_TOKEN)
     user_id = entry.data.get(CONF_USER_ID)
+    cloud_token = entry.data.get("cloud_token")
+    mqtt_client_id = entry.data.get("mqtt_client_id")
 
-    client = IfbCloudClient(token=token, user_id=user_id, session=session)
+    client = IfbCloudClient(
+        token=token,
+        cloud_token=cloud_token,
+        mqtt_client_id=mqtt_client_id,
+        user_id=user_id,
+        session=session,
+    )
 
     # If token expired or not stored, perform re-authentication
     if not token and entry.data.get(CONF_PHONE) and entry.data.get(CONF_PASSWORD):
@@ -48,10 +56,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             calling_code=entry.data.get(CONF_CALLING_CODE, "+91"),
         )
 
+    # Ensure we have a server-assigned MQTT client ID (avoids MAC collision with washer).
+    # This is the same call AppliancesFragment.checkAndGenerateMqttClientId() makes.
+    if not mqtt_client_id and client.token:
+        fetched = await client.fetch_mqtt_client_id()
+        if fetched:
+            _LOGGER.debug("Obtained MQTT client_id from server: %s", fetched)
+            # Persist it so it survives HA restarts
+            hass.config_entries.async_update_entry(
+                entry,
+                data={**entry.data, "mqtt_client_id": fetched},
+            )
+
     # Discover all appliances (using cloud catalog or user-configured MAC)
     fallback_mac = entry.data.get(CONF_MAC) or entry.options.get(CONF_MAC)
     fallback_name = entry.data.get(CONF_DEVICE_NAME) or entry.options.get(CONF_DEVICE_NAME)
-    device_list = await client.get_all_devices(fallback_mac=fallback_mac, fallback_name=fallback_name)
+    fallback_serial = entry.data.get("serial")
+    device_list = await client.get_all_devices(
+        fallback_mac=fallback_mac,
+        fallback_name=fallback_name,
+        fallback_serial=fallback_serial,
+    )
     devices: Dict[str, IfbDevice] = {d.mac: d for d in device_list}
 
     coordinator = IfbWasherCoordinator(hass, client, devices)

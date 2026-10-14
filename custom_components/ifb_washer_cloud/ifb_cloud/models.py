@@ -3,9 +3,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from .const import MachineState, PROGRAM_NAMES, DRY_MODES
+if TYPE_CHECKING:
+    from .frame import DecodedFrame
+
+from .const import MachineState, PROGRAM_NAMES, DRY_MODES, SPIN_SPEEDS, TEMPERATURES
+
+# Numeric state code → MachineState (must match frame.STATE_MAP)
+_STATE_CODE_MAP: Dict[int, MachineState] = {
+    0: MachineState.STANDBY,     # idle
+    1: MachineState.STANDBY,     # standby
+    2: MachineState.MAIN_WASH,   # start
+    3: MachineState.PREWASH,
+    4: MachineState.MAIN_WASH,
+    5: MachineState.RINSING,
+    6: MachineState.RINSING,
+    7: MachineState.RINSING,
+    8: MachineState.RINSING,
+    9: MachineState.RINSING,
+    10: MachineState.RINSING,
+    11: MachineState.SPINNING,   # final spin
+    12: MachineState.ANTI_CREASE,
+    13: MachineState.COMPLETE,   # end
+    14: MachineState.PAUSED,
+    15: MachineState.SOAK,
+    16: MachineState.RINSING,    # rinse hold
+    17: MachineState.MAIN_WASH,  # heating
+    18: MachineState.SPINNING,   # drain
+    19: MachineState.SPINNING,   # intermediate spin
+    20: MachineState.DELAY_START,
+    22: MachineState.DRYING,     # cooling / drying phase
+}
 
 
 @dataclass
@@ -73,6 +102,11 @@ class IfbCycleProgress:
     error_code: Optional[str] = None
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def is_paused(self) -> bool:
+        """Return True if appliance state is paused."""
+        return self.state == MachineState.PAUSED
+
     @classmethod
     def from_api_dict(cls, mac: str, data: Dict[str, Any]) -> "IfbCycleProgress":
         """Parse cycle progress from API dictionary or binary frame."""
@@ -134,4 +168,72 @@ class IfbCycleProgress:
             extra_rinse_count=int(data.get("extraRinse") or 0),
             error_code=data.get("errorCode"),
             raw_data=data,
+        )
+
+    @classmethod
+    def from_decoded_frame(cls, mac: str, frame: "DecodedFrame") -> "IfbCycleProgress":
+        """Build IfbCycleProgress from a DecodedFrame (binary telemetry).
+
+        Time fields come from the frame as *seconds* (balanceTimeHigh*60+balanceTimeLow).
+        We expose them as integer minutes for the HA sensor (rounding up so the display
+        shows "1 min" rather than "0 min" when 30 seconds remain).
+        """
+        state = _STATE_CODE_MAP.get(frame.state_code, MachineState.UNKNOWN)
+        prog_name = PROGRAM_NAMES.get(frame.program_code, f"Program {frame.program_code}")
+
+        # Convert seconds → minutes (ceiling so "1 min" shows when <60 s remain)
+        remaining_min = (frame.remaining_seconds + 59) // 60 if frame.remaining_seconds > 0 else 0
+        total_min = (frame.total_seconds + 59) // 60 if frame.total_seconds > 0 else 0
+
+        # Set spin speed label from RPM value
+        spin_rpm = frame.set_spin_rpm
+        if spin_rpm == 0:
+            spin_label = "No Spin"
+        else:
+            spin_label = f"{spin_rpm} RPM"
+
+        # Set temperature label
+        temp_c = frame.set_temperature_c
+        if temp_c == 0:
+            temp_label = "Cold"
+        else:
+            temp_label = f"{temp_c}°C"
+
+        # Error: alarm bytes non-zero
+        error_code: Optional[str] = None
+        if frame.alarm1 or frame.alarm2:
+            error_code = f"E{frame.alarm1:02X}{frame.alarm2:02X}"
+
+        return cls(
+            mac=mac,
+            is_running=frame.is_running,
+            state=state,
+            program_code=frame.program_code,
+            program_name=prog_name,
+            time_remaining_minutes=remaining_min,
+            total_time_minutes=total_min,
+            progress_percentage=frame.progress_pct,
+            motor_speed_rpm=frame.live_rpm,
+            water_temperature_c=frame.water_temperature_c,
+            selected_spin_speed=spin_label,
+            selected_temperature=temp_label,
+            selected_dry_mode="No Dry",  # dry mode is encoded in option bits; default safe value
+            door_locked=frame.door_locked,
+            child_lock_active=frame.child_lock,
+            prewash_active=frame.prewash_active,
+            soak_active=frame.soak_active,
+            steam_active=frame.steam_active,
+            extra_rinse_count=frame.extra_rinse_count,
+            error_code=error_code,
+            raw_data={
+                "state_code": frame.state_code,
+                "option1": frame.option1,
+                "option_enable": frame.option_enable,
+                "user_control": frame.user_control,
+                "previous_state": frame.previous_state,
+                "alarm1": frame.alarm1,
+                "alarm2": frame.alarm2,
+                "remaining_seconds": frame.remaining_seconds,
+                "total_seconds": frame.total_seconds,
+            },
         )
