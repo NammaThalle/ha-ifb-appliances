@@ -8,54 +8,58 @@ class TestIfbFrameBuilder(unittest.TestCase):
     """Test suite for binary command frame building."""
 
     def test_checksum_algorithm(self):
-        """Verify signed 8-bit checksum calculation matches protocol specs."""
-        test_payload = bytes([0xAA, 0x55, 0x01, 0x02, 0x03, 0x04])
+        """Verify 8-bit checksum calculation matches protocol specs."""
+        test_payload = bytes([99, 10, 1, 0, 1, 1, 0, 0, 0, 0])
         c1, c2 = calculate_checksum(test_payload)
-        self.assertIsInstance(c1, int)
-        self.assertIsInstance(c2, int)
-        self.assertTrue(0 <= c1 <= 255)
-        self.assertTrue(0 <= c2 <= 255)
+        self.assertEqual(c1, 112)
+        self.assertEqual(c2, 224)
 
     def test_start_frame_structure(self):
         """Verify Start cycle binary frame fields and header bytes."""
-        frame = IfbFrameBuilder.start(program=0x01, temp=0x03, spin=0x04, dry=0x00)
-        self.assertEqual(len(frame), 16)
-        # Header magic bytes
-        self.assertEqual(frame[0], 0xAA)
-        self.assertEqual(frame[1], 0x55)
-        # Frame length and command
-        self.assertEqual(frame[2], 0x0E)
-        self.assertEqual(frame[3], 0x01)  # 0x01 = Start
-        self.assertEqual(frame[4], 0x01)  # Program
-        self.assertEqual(frame[5], 0x03)  # Temp
-        self.assertEqual(frame[6], 0x04)  # Spin
-        self.assertEqual(frame[7], 0x00)  # Dry
-        # Checksum bytes at trailer
-        c1, c2 = calculate_checksum(bytes(frame[2:14]))
-        self.assertEqual(frame[14], c1)
-        self.assertEqual(frame[15], c2)
+        frame = IfbFrameBuilder.start()
+        self.assertEqual(len(frame), 12)
+        self.assertEqual(frame[0], 99)  # 0x63 header
+        self.assertEqual(frame[1], 10)  # length
+        self.assertEqual(frame[2], 1)   # opcode
+        self.assertEqual(frame[5], 1)   # start command
+        c1, c2 = calculate_checksum(bytes(frame[:10]))
+        self.assertEqual(frame[10], c1)
+        self.assertEqual(frame[11], c2)
+
+    def test_cycle_frame_structure(self):
+        """Verify 21-byte program/cycle setup frame."""
+        frame = IfbFrameBuilder.build_cycle_frame(program=6, temp=40, spin=1000)
+        self.assertEqual(len(frame), 21)
+        self.assertEqual(frame[0], 99)  # 0x63 header
+        self.assertEqual(frame[1], 19)  # payload length
+        self.assertEqual(frame[2], 3)   # cycle config opcode
+        self.assertEqual(frame[5], 6)   # program code (Express 15)
+        self.assertEqual(frame[7], 3)   # spin hi (1000 RPM >> 8)
+        self.assertEqual(frame[8], 232) # spin lo (1000 RPM & 0xFF)
+        self.assertEqual(frame[9], 40)  # temp 40C
+        c1, c2 = calculate_checksum(bytes(frame[:19]))
+        self.assertEqual(frame[19], c1)
+        self.assertEqual(frame[20], c2)
 
     def test_pause_frame_structure(self):
         """Verify Pause cycle command frame."""
         frame = IfbFrameBuilder.pause()
-        self.assertEqual(len(frame), 16)
-        self.assertEqual(frame[0], 0xAA)
-        self.assertEqual(frame[1], 0x55)
-        self.assertEqual(frame[3], 0x02)  # 0x02 = Pause
-        c1, c2 = calculate_checksum(bytes(frame[2:14]))
-        self.assertEqual(frame[14], c1)
-        self.assertEqual(frame[15], c2)
+        self.assertEqual(len(frame), 12)
+        self.assertEqual(frame[0], 99)
+        self.assertEqual(frame[5], 3)  # Pause opcode
+        c1, c2 = calculate_checksum(bytes(frame[:10]))
+        self.assertEqual(frame[10], c1)
+        self.assertEqual(frame[11], c2)
 
     def test_cancel_frame_structure(self):
         """Verify Cancel/Off cycle command frame."""
         frame = IfbFrameBuilder.cancel()
-        self.assertEqual(len(frame), 16)
-        self.assertEqual(frame[0], 0xAA)
-        self.assertEqual(frame[1], 0x55)
-        self.assertEqual(frame[3], 0x03)  # 0x03 = Cancel / Power Off
-        c1, c2 = calculate_checksum(bytes(frame[2:14]))
-        self.assertEqual(frame[14], c1)
-        self.assertEqual(frame[15], c2)
+        self.assertEqual(len(frame), 12)
+        self.assertEqual(frame[0], 99)
+        self.assertEqual(frame[5], 4)  # Cancel opcode
+        c1, c2 = calculate_checksum(bytes(frame[:10]))
+        self.assertEqual(frame[10], c1)
+        self.assertEqual(frame[11], c2)
 
 
 if __name__ == "__main__":
