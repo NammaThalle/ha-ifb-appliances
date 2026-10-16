@@ -564,6 +564,8 @@ class IfbCloudClient:
             body = {"serial": serial_no} if serial_no else {}
             resp = await self._post_api(ENDPOINT_GET_DEVICE_PROGRESS, body)
             data_list = resp.get("data") or resp.get("progress") or []
+            if isinstance(data_list, dict):
+                data_list = [data_list]
             if isinstance(data_list, list) and data_list:
                 item = next(
                     (d for d in data_list if isinstance(d, dict) and (d.get("serial") == serial_no or str(d.get("mac", "")).lower() == clean_mac)),
@@ -676,43 +678,13 @@ class IfbCloudClient:
         command_bytes: Union[bytes, List[bytes]],
         serial: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Transmit binary control frame(s) to appliance.
-
-        Primary transport: MyIFB REST API v5 sendCommand (device/smart/sendCommand).
-        Fallback transport: Cloud MQTT broker.
-        """
+        """Transmit binary control frame(s) to appliance via Cloud MQTT broker."""
         clean_mac = mac.strip().lower()
         if not MAC_REGEX.match(clean_mac):
             raise IfbApiError(f"Invalid MAC address format: {mac}")
 
         if serial:
             self._device_serials[clean_mac] = serial
-        serial_no = serial or self._device_serials.get(clean_mac)
-
-        frames = command_bytes if isinstance(command_bytes, list) else [command_bytes]
-
-        # 1. Primary: REST API v5 sendCommand
-        try:
-            for frame in frames:
-                frame_list = [int(b) & 0xFF for b in frame]
-                payload: Dict[str, Any] = {
-                    "mac": clean_mac,
-                    "message": frame_list,
-                }
-                if serial_no:
-                    payload["serial"] = serial_no
-                resp = await self._post_api(ENDPOINT_SEND_COMMAND, payload)
-                _LOGGER.info(
-                    "Transmitted command (%d bytes) to %s via REST API: %s",
-                    len(frame), clean_mac, resp,
-                )
-            return {
-                "status": "success",
-                "transport": "rest",
-                "frames": len(frames),
-            }
-        except Exception as rest_err:
-            _LOGGER.warning("REST sendCommand failed for %s (%s). Falling back to MQTT.", clean_mac, rest_err)
 
         def _publish_mqtt() -> Dict[str, Any]:
             import ssl
@@ -721,11 +693,9 @@ class IfbCloudClient:
 
             client_id, username, password = self._resolve_mqtt_credentials(clean_mac)
 
-            # Determine broker based on hardware type (firmware version prefix)
-            # GainSpan (older) → mqtt2:8883; ESP32 (newer) → mqttesp:8887
-            device = None  # IfbDevice not accessible here; use MAC OUI heuristic
+            # GainSpan (older) -> mqtt2:8883; ESP32 (newer) -> mqttesp:8887
             mac_oui = clean_mac[:8].lower()
-            if mac_oui == "20:f8:5e":  # GainSpan OUI
+            if mac_oui == "20:f8:5e":
                 endpoints = [(MQTT_GAINSPAN_HOST, MQTT_GAINSPAN_PORT)]
             else:
                 endpoints = [(MQTT_ESP_HOST, MQTT_ESP_PORT), (MQTT_GAINSPAN_HOST, MQTT_GAINSPAN_PORT)]
@@ -754,32 +724,28 @@ class IfbCloudClient:
                     connected = [False]
                     published = [False]
                     conn_rc = [None]
-                    topic_lower = f"Command/{clean_mac}"
-                    topic_upper = f"Command/{clean_mac.upper()}"
-                    resp_lower = f"Response/{clean_mac}"
-                    resp_upper = f"Response/{clean_mac.upper()}"
+                    topic = f"Command/{clean_mac}"
+                    resp_topic = f"Response/{clean_mac}"
 
                     def on_connect(c, userdata, flags, rc, props=None):
                         conn_rc[0] = rc
                         if (hasattr(rc, "is_failure") and not rc.is_failure) or rc == 0:
                             connected[0] = True
                             try:
-                                c.subscribe(resp_lower, qos=1)
-                                c.subscribe(resp_upper, qos=1)
+                                c.subscribe(resp_topic, qos=0)
                             except Exception as sub_err:
-                                _LOGGER.debug("Could not subscribe to Response topics: %s", sub_err)
+                                _LOGGER.debug("Could not subscribe to Response topic: %s", sub_err)
                             for f_idx, frame in enumerate(frames):
-                                _LOGGER.warning(
+                                _LOGGER.info(
                                     "[IFB Cloud] Connected to %s:%s (client_id=%s, user=%s). "
-                                    "Publishing frame %d/%d (%d bytes, qos=1) to %s & %s: %s",
+                                    "Publishing frame %d/%d (%d bytes, qos=0) to %s: %s",
                                     host, port, client_id, username,
                                     f_idx + 1, len(frames), len(frame),
-                                    topic_lower, topic_upper, list(frame),
+                                    topic, list(frame),
                                 )
-                                c.publish(topic_lower, frame, qos=1, retain=False)
-                                c.publish(topic_upper, frame, qos=1, retain=False)
+                                c.publish(topic, frame, qos=0, retain=False)
                                 if f_idx < len(frames) - 1:
-                                    time.sleep(0.5)
+                                    time.sleep(0.3)
                             published[0] = True
 
                     client.on_connect = on_connect
@@ -788,17 +754,17 @@ class IfbCloudClient:
                         "Connecting to IFB MQTT %s:%s (client_id=%s, user=%s)",
                         host, port, client_id, username,
                     )
-                    client.connect(host, port, keepalive=30)
+                    client.connect(host, port, keepalive=10)
                     client.loop_start()
 
-                    wait_timeout = 5.0 + len(frames) * 1.0
+                    wait_timeout = 3.0 + len(frames) * 0.5
                     start_t = time.time()
                     while time.time() - start_t < wait_timeout:
                         if published[0] or (conn_rc[0] is not None and conn_rc[0] != 0):
                             break
-                        time.sleep(0.1)
+                        time.sleep(0.05)
 
-                    time.sleep(0.5)
+                    time.sleep(0.2)
                     client.loop_stop()
                     client.disconnect()
 
@@ -809,22 +775,24 @@ class IfbCloudClient:
                     return {
                         "status": "success",
                         "broker": f"{host}:{port}",
-                        "topic": topic_lower,
+                        "topic": topic,
                         "bytes": total_bytes,
                         "frames": len(frames),
                     }
                 except Exception as ex:
                     last_err = str(ex)
                     _LOGGER.warning("MQTT transmission error on %s:%s: %s", host, port, ex)
+                finally:
                     if client is not None:
                         try:
                             client.loop_stop()
                             client.disconnect()
                         except Exception:
                             pass
-                    continue
 
-            raise IfbApiError(f"Failed to transmit command via IFB MQTT: {last_err}")
+            raise IfbConnectionError(
+                f"Failed to publish command to {clean_mac} via any broker. Last error: {last_err}"
+            )
 
         return await asyncio.to_thread(_publish_mqtt)
 

@@ -14,7 +14,9 @@ import aiohttp
 MAC_REGEX = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$")
 
 from .const import (
+    API_V5_BASE_URL,
     API_V4_BASE_URL,
+    DEFAULT_BASE_URL,
     DEFAULT_HEADERS,
     ENDPOINT_AUTH_GENERATE_TOKEN,
     ENDPOINT_AUTH_LOGIN,
@@ -69,7 +71,7 @@ class IfbCloudClient:
         mqtt_client_id: Optional[str] = None,
         user_id: Optional[str] = None,
         session: Optional[aiohttp.ClientSession] = None,
-        base_url: str = API_V4_BASE_URL,
+        base_url: str = DEFAULT_BASE_URL,
     ) -> None:
         """Initialize the IFB Cloud client."""
         self._token: Optional[str] = token
@@ -191,82 +193,87 @@ class IfbCloudClient:
             "User-Agent": "Mozilla/5.0 (iPhone; CPU OS 18_0 like Mac OS X)",
         }
 
-        # Try verifyOtpAndLogin (clean Adobe Commerce 4-digit OTP login)
-        login_query = """
-        mutation VerifyOtpAndLogin($input: verifyOtpInput!) {
-          verifyOtpAndLogin(input: $input) {
+        # Try verifyAppOtp first to get both token and cloudData (AWS token)
+        app_query = f"""mutation {{
+          verifyAppOtp(input: {{
+            callingCode: "{calling_code}",
+            userName: "{clean_phone}",
+            otp: "{otp_str}"
+          }}) {{
             status
             message
             token
-            isCustomerExist
-          }
-        }
-        """
-        login_payload = {
-            "query": login_query,
-            "variables": {
-                "input": {
-                    "mobileNumber": clean_phone,
-                    "otp": otp_str,
-                }
-            },
-        }
+            cloudData
+          }}
+        }}"""
+        app_payload = {"query": app_query}
 
         token = None
+        cloud_token = None
         try:
             async with session.post(
                 GRAPHQL_AUTH_URL,
-                json=login_payload,
+                json=app_payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                data = await resp.json()
-                result = data.get("data", {}).get("verifyOtpAndLogin") or {}
-                token = result.get("token")
+            ) as app_resp:
+                app_data = await app_resp.json()
+                app_result = app_data.get("data", {}).get("verifyAppOtp") or {}
+                token = app_result.get("token")
+                raw_cloud = app_result.get("cloudData")
+                if raw_cloud:
+                    try:
+                        parsed_cloud = json.loads(raw_cloud) if isinstance(raw_cloud, str) else raw_cloud
+                        cloud_token = (
+                            parsed_cloud.get("data", {}).get("token", {}).get("token")
+                            or parsed_cloud.get("token", {}).get("token")
+                            or parsed_cloud.get("token")
+                        )
+                    except Exception as parse_err:
+                        _LOGGER.debug("Could not parse cloudData JSON: %s", parse_err)
 
-                # If verifyOtpAndLogin didn't return a token and OTP is 6 digits, fallback to verifyAppOtp
-                if not token and len(otp_str) == 6:
-                    app_query = """
-                    mutation VerifyAppOtp($input: AppVerifyOtpInput!) {
-                      verifyAppOtp(input: $input) {
+                # Fallback to verifyOtpAndLogin if verifyAppOtp didn't yield token
+                if not token:
+                    login_query = """
+                    mutation VerifyOtpAndLogin($input: verifyOtpInput!) {
+                      verifyOtpAndLogin(input: $input) {
                         status
                         message
                         token
+                        isCustomerExist
                       }
                     }
                     """
-                    app_payload = {
-                        "query": app_query,
+                    login_payload = {
+                        "query": login_query,
                         "variables": {
                             "input": {
-                                "callingCode": calling_code,
-                                "userName": clean_phone,
+                                "mobileNumber": clean_phone,
                                 "otp": otp_str,
                             }
                         },
                     }
                     async with session.post(
                         GRAPHQL_AUTH_URL,
-                        json=app_payload,
+                        json=login_payload,
                         headers=headers,
                         timeout=aiohttp.ClientTimeout(total=15),
-                    ) as app_resp:
-                        app_data = await app_resp.json()
-                        app_result = app_data.get("data", {}).get("verifyAppOtp") or {}
-                        token = app_result.get("token")
+                    ) as resp:
+                        data = await resp.json()
+                        result = data.get("data", {}).get("verifyOtpAndLogin") or {}
+                        token = result.get("token")
                         if not token:
                             err_list = app_data.get("errors") or data.get("errors") or []
-                            msg = err_list[0].get("message") if err_list else (result.get("message") or "Invalid or expired OTP")
+                            msg = err_list[0].get("message") if err_list else "Invalid or expired OTP"
                             raise IfbAuthError(msg)
-                elif not token:
-                    err_list = data.get("errors") or []
-                    msg = err_list[0].get("message") if err_list else (result.get("message") or "Invalid or expired OTP")
-                    raise IfbAuthError(msg)
 
             self._token = str(token)
+            if cloud_token:
+                self._cloud_token = str(cloud_token)
             self._user_id = clean_phone
             return {
                 "token": self._token,
+                "cloudToken": self._cloud_token,
                 "userId": self._user_id,
             }
         except asyncio.TimeoutError as err:
@@ -384,7 +391,7 @@ class IfbCloudClient:
         }
 
         body = payload or {}
-        if self._user_id and "userId" not in body:
+        if self._user_id and "userId" not in body and "api/v4" in self._base_url:
             body["userId"] = self._user_id
 
         try:
@@ -396,7 +403,9 @@ class IfbCloudClient:
                 try:
                     data = await resp.json()
                 except Exception:
-                    clean_text = text[:60].replace("\n", " ").strip()
+                    clean_text = text[:100].replace("\n", " ").strip()
+                    if resp.status == 200:
+                        return {"status": True, "message": clean_text, "data": clean_text}
                     raise IfbApiError(f"Invalid non-JSON response from {endpoint}: {clean_text}")
 
                 if resp.status != 200:
@@ -423,8 +432,26 @@ class IfbCloudClient:
         device_list: List[IfbDevice] = []
         products: list[dict[str, Any]] = []
 
-        # 1. Query GraphQL getRegisterAppliances if token is available
-        if self._token:
+        # 1. Primary: Query v5 device/all endpoint (returns live IoT appliances with MAC and status)
+        try:
+            resp = await self._post_api(ENDPOINT_GET_ALL_DEVICES, {})
+            raw_devices = resp.get("data") or resp.get("devices") or resp.get("deviceList") or []
+            if isinstance(raw_devices, list):
+                for d in raw_devices:
+                    if isinstance(d, dict):
+                        dev_mac = str(d.get("mac") or "").strip().lower()
+                        app_type = str(d.get("applianceType") or "").upper()
+                        conn = str(d.get("connectivity") or "")
+                        if dev_mac and (conn == "WiFi" or "WASHER" in app_type or "DRYER" in app_type):
+                            dev = IfbDevice.from_api_dict(d)
+                            if dev.serial_number:
+                                self._device_serials[dev.mac] = dev.serial_number
+                            device_list.append(dev)
+        except Exception as err:
+            _LOGGER.debug("device/all API error: %s", err)
+
+        # 2. Fallback: Query GraphQL getRegisterAppliances if device/all returned no IoT devices
+        if not device_list:
             headers = {
                 "Content-Type": "application/json",
                 "Store": "default",
@@ -481,7 +508,7 @@ class IfbCloudClient:
                                     dev_mac = str(p.get("mac") or p.get("wifi_mac") or p.get("macAddress") or fallback_mac or s_no or "").strip().lower()
                                     if dev_mac:
                                         if s_no:
-                                            self._device_serials[dev_mac] = str(s_no)
+                                             self._device_serials[dev_mac] = str(s_no)
                                         device_list.append(
                                             IfbDevice(
                                                 mac=dev_mac,
@@ -498,22 +525,7 @@ class IfbCloudClient:
             except Exception as err:
                 _LOGGER.debug("GraphQL getRegisterAppliances error: %s", err)
 
-        # 2. Check legacy API endpoint if still empty
-        if not device_list:
-            try:
-                resp = await self._post_api(ENDPOINT_GET_ALL_DEVICES)
-                raw_devices = resp.get("devices") or resp.get("data") or resp.get("deviceList") or []
-                if isinstance(raw_devices, list):
-                    for d in raw_devices:
-                        if isinstance(d, dict):
-                            dev = IfbDevice.from_api_dict(d)
-                            if dev.serial_number:
-                                self._device_serials[dev.mac] = dev.serial_number
-                            device_list.append(dev)
-            except Exception as err:
-                _LOGGER.debug("Legacy getAllDevices error: %s", err)
-
-        # 3. If cloud does not list IoT appliances but user configured a MAC address, link it
+        # 3. Fallback: If cloud does not list IoT appliances but user configured a MAC address, link it
         if not device_list and fallback_mac:
             clean_mac = fallback_mac.strip().lower()
             first_serial = next(
@@ -539,28 +551,46 @@ class IfbCloudClient:
         return device_list
 
     async def get_device_progress(self, mac: str) -> IfbCycleProgress:
-        """Fetch current telemetry for appliance.
-
-        The primary path is POST /getResponse which returns the last binary
-        telemetry frame the washer published to the cloud broker.  This is
-        decoded using the exact byte layout from MachineState.java.
-
-        Falls back to POST /getUserDeviceProgress (legacy JSON) if the binary
-        endpoint fails or returns no data.
-        """
+        """Fetch current telemetry for appliance."""
         clean_mac = mac.strip().lower()
         if not MAC_REGEX.match(clean_mac):
             _LOGGER.debug("Invalid MAC address syntax: %s", mac)
             return IfbCycleProgress(mac=clean_mac, is_running=False, state=MachineState.STANDBY)
 
-        # --- Primary: binary frame via getResponse ---
+        serial_no = self._device_serials.get(clean_mac)
+
+        # 1. Primary: Query v5 device/smart/progress
+        try:
+            body = {"serial": serial_no} if serial_no else {}
+            resp = await self._post_api(ENDPOINT_GET_DEVICE_PROGRESS, body)
+            data_list = resp.get("data") or resp.get("progress") or []
+            if isinstance(data_list, dict):
+                data_list = [data_list]
+            if isinstance(data_list, list) and data_list:
+                item = next(
+                    (d for d in data_list if isinstance(d, dict) and (d.get("serial") == serial_no or str(d.get("mac", "")).lower() == clean_mac)),
+                    data_list[0] if isinstance(data_list[0], dict) else None,
+                )
+                if item and isinstance(item, dict):
+                    # Enrich with device/all state if available
+                    try:
+                        all_resp = await self._post_api(ENDPOINT_GET_ALL_DEVICES, {})
+                        for d in (all_resp.get("data") or []):
+                            if isinstance(d, dict) and (str(d.get("mac", "")).lower() == clean_mac or d.get("serial") == serial_no):
+                                item = {**d, **item}
+                                break
+                    except Exception:
+                        pass
+                    return IfbCycleProgress.from_api_dict(clean_mac, item)
+        except Exception as err:
+            _LOGGER.debug("device/smart/progress query error for %s: %s", clean_mac, err)
+
+        # 2. Binary frame via getResponse if supported
         try:
             resp = await self._post_api(ENDPOINT_GET_RESPONSE, {"mac": clean_mac})
             raw_data = resp.get("data") or {}
             response_field = raw_data.get("response")
             if response_field:
-                # The API may return the binary payload as a base64 string or
-                # as a JSON array of integers (both seen in practice).
                 frame_bytes: Optional[bytes] = None
                 if isinstance(response_field, (list, tuple)):
                     frame_bytes = bytes(int(b) & 0xFF for b in response_field)
@@ -576,24 +606,17 @@ class IfbCloudClient:
                     decoded = decode_frame(frame_bytes)
                     if decoded is not None:
                         return IfbCycleProgress.from_decoded_frame(clean_mac, decoded)
-                    else:
-                        _LOGGER.debug(
-                            "Binary frame decode failed for %s (len=%d, b0=0x%02x)",
-                            clean_mac, len(frame_bytes), frame_bytes[0] if frame_bytes else 0,
-                        )
         except Exception as err:
             _LOGGER.debug("getResponse binary path failed for %s: %s", clean_mac, err)
 
-        # --- Fallback: legacy getUserDeviceProgress JSON ---
+        # 3. Fallback: device/all directly
         try:
-            resp = await self._post_api(ENDPOINT_GET_DEVICE_PROGRESS, {"mac": clean_mac})
-            progress_data = resp.get("data") or resp.get("progress") or resp
-            if isinstance(progress_data, list) and progress_data:
-                progress_data = progress_data[0]
-            if isinstance(progress_data, dict):
-                return IfbCycleProgress.from_api_dict(clean_mac, progress_data)
+            resp = await self._post_api(ENDPOINT_GET_ALL_DEVICES, {})
+            for d in (resp.get("data") or []):
+                if isinstance(d, dict) and (str(d.get("mac", "")).lower() == clean_mac or d.get("serial") == serial_no):
+                    return IfbCycleProgress.from_api_dict(clean_mac, d)
         except Exception as err:
-            _LOGGER.debug("getUserDeviceProgress fallback failed for %s: %s", clean_mac, err)
+            _LOGGER.debug("device/all fallback failed for %s: %s", clean_mac, err)
 
         return IfbCycleProgress(mac=clean_mac, is_running=False, state=MachineState.STANDBY)
 
@@ -655,18 +678,11 @@ class IfbCloudClient:
         command_bytes: Union[bytes, List[bytes]],
         serial: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Transmit binary control frame(s) to appliance via cloud MQTT broker.
-
-        Uses a transient connection with the correct credentials:
-          client_id = server-assigned UUID (not MAC)
-          username  = device serial number (not MAC)
-          password  = Bearer token
-        """
+        """Transmit binary control frame(s) to appliance via Cloud MQTT broker."""
         clean_mac = mac.strip().lower()
         if not MAC_REGEX.match(clean_mac):
             raise IfbApiError(f"Invalid MAC address format: {mac}")
 
-        # Cache serial if explicitly provided
         if serial:
             self._device_serials[clean_mac] = serial
 
@@ -677,11 +693,9 @@ class IfbCloudClient:
 
             client_id, username, password = self._resolve_mqtt_credentials(clean_mac)
 
-            # Determine broker based on hardware type (firmware version prefix)
-            # GainSpan (older) → mqtt2:8883; ESP32 (newer) → mqttesp:8887
-            device = None  # IfbDevice not accessible here; use MAC OUI heuristic
+            # GainSpan (older) -> mqtt2:8883; ESP32 (newer) -> mqttesp:8887
             mac_oui = clean_mac[:8].lower()
-            if mac_oui == "20:f8:5e":  # GainSpan OUI
+            if mac_oui == "20:f8:5e":
                 endpoints = [(MQTT_GAINSPAN_HOST, MQTT_GAINSPAN_PORT)]
             else:
                 endpoints = [(MQTT_ESP_HOST, MQTT_ESP_PORT), (MQTT_GAINSPAN_HOST, MQTT_GAINSPAN_PORT)]
@@ -710,32 +724,28 @@ class IfbCloudClient:
                     connected = [False]
                     published = [False]
                     conn_rc = [None]
-                    topic_lower = f"Command/{clean_mac}"
-                    topic_upper = f"Command/{clean_mac.upper()}"
-                    resp_lower = f"Response/{clean_mac}"
-                    resp_upper = f"Response/{clean_mac.upper()}"
+                    topic = f"Command/{clean_mac}"
+                    resp_topic = f"Response/{clean_mac}"
 
                     def on_connect(c, userdata, flags, rc, props=None):
                         conn_rc[0] = rc
                         if (hasattr(rc, "is_failure") and not rc.is_failure) or rc == 0:
                             connected[0] = True
                             try:
-                                c.subscribe(resp_lower, qos=1)
-                                c.subscribe(resp_upper, qos=1)
+                                c.subscribe(resp_topic, qos=0)
                             except Exception as sub_err:
-                                _LOGGER.debug("Could not subscribe to Response topics: %s", sub_err)
+                                _LOGGER.debug("Could not subscribe to Response topic: %s", sub_err)
                             for f_idx, frame in enumerate(frames):
-                                _LOGGER.warning(
+                                _LOGGER.info(
                                     "[IFB Cloud] Connected to %s:%s (client_id=%s, user=%s). "
-                                    "Publishing frame %d/%d (%d bytes, qos=1) to %s & %s: %s",
+                                    "Publishing frame %d/%d (%d bytes, qos=0) to %s: %s",
                                     host, port, client_id, username,
                                     f_idx + 1, len(frames), len(frame),
-                                    topic_lower, topic_upper, list(frame),
+                                    topic, list(frame),
                                 )
-                                c.publish(topic_lower, frame, qos=1, retain=False)
-                                c.publish(topic_upper, frame, qos=1, retain=False)
+                                c.publish(topic, frame, qos=0, retain=False)
                                 if f_idx < len(frames) - 1:
-                                    time.sleep(0.5)
+                                    time.sleep(0.3)
                             published[0] = True
 
                     client.on_connect = on_connect
@@ -744,17 +754,17 @@ class IfbCloudClient:
                         "Connecting to IFB MQTT %s:%s (client_id=%s, user=%s)",
                         host, port, client_id, username,
                     )
-                    client.connect(host, port, keepalive=30)
+                    client.connect(host, port, keepalive=10)
                     client.loop_start()
 
-                    wait_timeout = 5.0 + len(frames) * 1.0
+                    wait_timeout = 3.0 + len(frames) * 0.5
                     start_t = time.time()
                     while time.time() - start_t < wait_timeout:
                         if published[0] or (conn_rc[0] is not None and conn_rc[0] != 0):
                             break
-                        time.sleep(0.1)
+                        time.sleep(0.05)
 
-                    time.sleep(0.5)
+                    time.sleep(0.2)
                     client.loop_stop()
                     client.disconnect()
 
@@ -765,22 +775,24 @@ class IfbCloudClient:
                     return {
                         "status": "success",
                         "broker": f"{host}:{port}",
-                        "topic": topic_lower,
+                        "topic": topic,
                         "bytes": total_bytes,
                         "frames": len(frames),
                     }
                 except Exception as ex:
                     last_err = str(ex)
                     _LOGGER.warning("MQTT transmission error on %s:%s: %s", host, port, ex)
+                finally:
                     if client is not None:
                         try:
                             client.loop_stop()
                             client.disconnect()
                         except Exception:
                             pass
-                    continue
 
-            raise IfbApiError(f"Failed to transmit command via IFB MQTT: {last_err}")
+            raise IfbConnectionError(
+                f"Failed to publish command to {clean_mac} via any broker. Last error: {last_err}"
+            )
 
         return await asyncio.to_thread(_publish_mqtt)
 
@@ -853,4 +865,14 @@ class IfbCloudClient:
     async def turn_off(self, mac: str, serial: Optional[str] = None) -> Dict[str, Any]:
         """Send Power Off command."""
         frame = IfbFrameBuilder.turn_off()
+        return await self.send_command(mac, frame, serial=serial)
+
+    async def child_lock(self, mac: str, serial: Optional[str] = None) -> Dict[str, Any]:
+        """Send Child Lock command."""
+        frame = IfbFrameBuilder.child_lock()
+        return await self.send_command(mac, frame, serial=serial)
+
+    async def child_unlock(self, mac: str, serial: Optional[str] = None) -> Dict[str, Any]:
+        """Send Child Unlock command."""
+        frame = IfbFrameBuilder.child_unlock()
         return await self.send_command(mac, frame, serial=serial)

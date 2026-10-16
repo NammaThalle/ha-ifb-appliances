@@ -11,6 +11,7 @@ CONF_USER_ID = "user_id"
 CONF_OTP = "otp"
 CONF_MAC = "mac"
 CONF_DEVICE_NAME = "device_name"
+CONF_MQTT_CLIENT_ID = "mqtt_client_id"
 
 AUTH_TYPE_OTP = "otp"
 AUTH_TYPE_CREDENTIALS = "credentials"

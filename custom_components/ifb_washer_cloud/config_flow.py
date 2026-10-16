@@ -18,6 +18,7 @@ from .const import (
     CONF_CALLING_CODE,
     CONF_DEVICE_NAME,
     CONF_MAC,
+    CONF_MQTT_CLIENT_ID,
     CONF_OTP,
     CONF_PASSWORD,
     CONF_PHONE,
@@ -276,6 +277,9 @@ class IfbWasherOptionsFlow(config_entries.OptionsFlow):
         current_name = self._config_entry.options.get(CONF_DEVICE_NAME) or self._config_entry.data.get(
             CONF_DEVICE_NAME, "IFB Washer Dryer"
         )
+        current_mqtt_client_id = self._config_entry.options.get(CONF_MQTT_CLIENT_ID) or self._config_entry.data.get(
+            CONF_MQTT_CLIENT_ID, ""
+        )
 
         if user_input is not None:
             mac_str = str(user_input.get(CONF_MAC) or "").strip()
@@ -288,6 +292,7 @@ class IfbWasherOptionsFlow(config_entries.OptionsFlow):
             {
                 vol.Optional(CONF_MAC, default=current_mac): str,
                 vol.Optional(CONF_DEVICE_NAME, default=current_name): str,
+                vol.Optional(CONF_MQTT_CLIENT_ID, default=current_mqtt_client_id): str,
             }
         )
 
