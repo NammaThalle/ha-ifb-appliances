@@ -95,8 +95,6 @@ cards:
     remaining_time_entity: sensor.ifb_washer_dryer_time_remaining
     remaining_time_unit: minutes
     progress_entity: sensor.ifb_washer_dryer_progress
-    door_entity: binary_sensor.ifb_washer_dryer_door_locked
-    door_invert: true
     start_entity: button.ifb_washer_dryer_start
     pause_entity: button.ifb_washer_dryer_pause
     stop_entity: button.ifb_washer_dryer_stop
@@ -113,6 +111,11 @@ cards:
         name: "Spin Speed"
       - entity: select.ifb_washer_dryer_dry_mode
         name: "Dry Mode"
+      - type: divider
+      - entity: binary_sensor.ifb_washer_dryer_door_locked
+        name: "Door Lock"
+      - entity: binary_sensor.ifb_washer_dryer_child_lock
+        name: "Child Lock"
       - type: divider
       - entity: button.ifb_washer_dryer_start
         name: "Start Cycle"
