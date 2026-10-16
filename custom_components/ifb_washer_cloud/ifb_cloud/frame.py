@@ -283,3 +283,13 @@ class IfbFrameBuilder:
     def turn_off(cls) -> bytes:
         """Create Turn Off command frame."""
         return cls.CMD_TURN_OFF
+
+    @classmethod
+    def child_lock(cls) -> bytes:
+        """Create Child Lock command frame."""
+        return cls.CMD_CHILD_LOCK
+
+    @classmethod
+    def child_unlock(cls) -> bytes:
+        """Create Child Unlock command frame."""
+        return cls.CMD_CHILD_UNLOCK

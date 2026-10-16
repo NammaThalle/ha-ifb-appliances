@@ -58,7 +58,8 @@ class IfbDevice:
         name = str(data.get("name") or data.get("deviceName") or data.get("alias") or "IFB Appliance")
         model = str(data.get("model") or data.get("modelName") or data.get("machineModel") or "IFB Appliance")
         serial = data.get("serialNumber") or data.get("srNo") or data.get("serial")
-        is_online = bool(data.get("isOnline") or data.get("status") == "online" or data.get("online", False))
+        is_online = bool(data.get("isOnline") or str(data.get("status", "")).lower() == "online" or data.get("online", False))
+        category = data.get("applianceType") or data.get("category") or data.get("deviceCategory") or "Washer Dryer"
         
         # Hardware type: GainSpan Wi-Fi module IEEE OUI prefix is 20:f8:5e; modern IFB appliances use ESP32/ESP8266
         hw_type = "gainspan" if mac.startswith("20:f8:5e") or str(data.get("moduleType", "")).lower() == "gainspan" else "esp"
@@ -69,7 +70,7 @@ class IfbDevice:
             model_name=model,
             device_id=data.get("deviceId") or data.get("id") or data.get("_id"),
             serial_number=str(serial) if serial else None,
-            category=data.get("category") or data.get("deviceCategory") or "Washer Dryer",
+            category=category,
             is_online=is_online,
             hardware_type=hw_type,
             firmware_version=data.get("firmwareVersion") or data.get("swVersion"),
@@ -110,31 +111,45 @@ class IfbCycleProgress:
     @classmethod
     def from_api_dict(cls, mac: str, data: Dict[str, Any]) -> "IfbCycleProgress":
         """Parse cycle progress from API dictionary or binary frame."""
-        # Check running state
-        is_running = bool(data.get("running") or data.get("isRunning") or data.get("runState", 0) == 1)
+        raw_state_val = data.get("state") if data.get("state") is not None else data.get("machineState")
+        state = MachineState.STANDBY
         
-        # State mapping
-        raw_state = str(data.get("state") or data.get("machineState") or "standby").lower()
-        if "wash" in raw_state and "pre" not in raw_state:
-            state = MachineState.MAIN_WASH
-        elif "rinse" in raw_state:
-            state = MachineState.RINSING
-        elif "spin" in raw_state:
-            state = MachineState.SPINNING
-        elif "dry" in raw_state:
-            state = MachineState.DRYING
-        elif "steam" in raw_state:
-            state = MachineState.STEAM
-        elif "pause" in raw_state:
-            state = MachineState.PAUSED
-        elif "complete" in raw_state or "finish" in raw_state:
-            state = MachineState.COMPLETE
-        elif "error" in raw_state:
-            state = MachineState.ERROR
-        elif is_running:
-            state = MachineState.MAIN_WASH
-        else:
-            state = MachineState.STANDBY
+        if isinstance(raw_state_val, int):
+            state = _STATE_CODE_MAP.get(raw_state_val, MachineState.STANDBY)
+        elif raw_state_val is not None:
+            raw_state = str(raw_state_val).lower()
+            if "wash" in raw_state and "pre" not in raw_state:
+                state = MachineState.MAIN_WASH
+            elif "rinse" in raw_state:
+                state = MachineState.RINSING
+            elif "spin" in raw_state:
+                state = MachineState.SPINNING
+            elif "dry" in raw_state or "cool" in raw_state:
+                state = MachineState.DRYING
+            elif "steam" in raw_state:
+                state = MachineState.STEAM
+            elif "pause" in raw_state:
+                state = MachineState.PAUSED
+            elif "complete" in raw_state or "finish" in raw_state or "end" in raw_state:
+                state = MachineState.COMPLETE
+            elif "error" in raw_state:
+                state = MachineState.ERROR
+
+        # Check running state
+        is_running = bool(
+            data.get("running")
+            or data.get("isRunning")
+            or data.get("runState", 0) == 1
+            or state in {
+                MachineState.MAIN_WASH,
+                MachineState.PREWASH,
+                MachineState.RINSING,
+                MachineState.SPINNING,
+                MachineState.DRYING,
+                MachineState.STEAM,
+                MachineState.SOAK,
+            }
+        )
 
         prog_code = int(data.get("programCode") or data.get("program") or 0)
         prog_name = PROGRAM_NAMES.get(prog_code, str(data.get("programName") or "Custom"))

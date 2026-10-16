@@ -2,8 +2,10 @@
 
 from enum import Enum, IntEnum
 
-# Base URLs discovered from My IFB Android app (com.sqt_smartapp.ifb_remote)
+# Base URLs
+API_V5_BASE_URL = "https://myifb.ifbcloud.in/api/v5"
 API_V4_BASE_URL = "https://www.ifbcloud.in:3000/api/v4"
+DEFAULT_BASE_URL = API_V5_BASE_URL
 MAGENTO_BASE_URL = "https://ifbappliances.com/rest/V1"
 GRAPHQL_AUTH_URL = "https://edge-graph.adobe.io/api/c966e57b-84c0-4ebb-898a-6e860cf1f906/graphql"
 
@@ -13,23 +15,24 @@ MQTT_ESP_PORT = 8887
 MQTT_GAINSPAN_HOST = "mqtt2.ifbcloud.in"
 MQTT_GAINSPAN_PORT = 8883
 
-# REST Endpoints (appended to API_V4_BASE_URL)
-ENDPOINT_GET_ALL_DEVICES = "getAllDevices"
-ENDPOINT_GET_DEVICE_PROGRESS = "getUserDeviceProgress"
-# getResponse: returns the last binary telemetry frame the washer published.
-# Response: { "data": { "mac": "...", "response": <bytes|base64|int[]>, "responseStatus": "..." } }
+# REST Endpoints (appended to base URL)
+ENDPOINT_GET_ALL_DEVICES = "device/all"
+ENDPOINT_GET_DEVICE_PROGRESS = "device/smart/progress"
+ENDPOINT_SEND_COMMAND = "device/smart/sendCommand"
+ENDPOINT_GET_DEVICE_STATUS = "device/smart/status"
+ENDPOINT_GET_DEVICE_META = "device/meta"
+ENDPOINT_USER_PROFILE = "user/profile"
 ENDPOINT_GET_RESPONSE = "getResponse"
-ENDPOINT_GET_DEVICE_STATUS = "deviceStatus"
-ENDPOINT_GET_DEVICE_META = "getDeviceMeta"
 ENDPOINT_GET_MODEL_SPECIFICATIONS = "getModelSpecifications"
-# mapping/client: returns a server-assigned MQTT client UUID (no body needed).
-# Schema: { "data": { "clientID": "<uuid>" }, "status": true, "statusCode": 200 }
 ENDPOINT_GET_MQTT_CLIENT = "mapping/client"
-ENDPOINT_SEND_COMMAND = "sendCommand"
 ENDPOINT_CONNECT = "connect"
 ENDPOINT_DISCONNECT = "disconnect"
 ENDPOINT_UPDATE_TOKEN = "updateToken"
-ENDPOINT_USER_PROFILE = "getUserProfile"
+
+# Legacy v4 aliases
+LEGACY_GET_ALL_DEVICES = "getAllDevices"
+LEGACY_GET_DEVICE_PROGRESS = "getUserDeviceProgress"
+LEGACY_DEVICE_STATUS = "deviceStatus"
 
 # Authentication Endpoints
 ENDPOINT_AUTH_LOGIN = "restapi/login"
@@ -38,8 +41,8 @@ ENDPOINT_AUTH_GENERATE_TOKEN = "restapi/generatetoken"
 
 # Default HTTP Headers matching the official mobile application
 DEFAULT_HEADERS = {
-    "User-Agent": "MyIFB/Android (okhttp/4.9.0)",
-    "Accept": "application/json",
+    "User-Agent": "MyIFB/2.0.29(Mobile; iOS; 27.0.1; iPhone 16 Pro)",
+    "Accept": "application/json, text/plain, */*",
     "Content-Type": "application/json",
 }
 

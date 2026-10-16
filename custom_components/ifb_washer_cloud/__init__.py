@@ -17,6 +17,7 @@ from .const import (
     CONF_PHONE,
     CONF_TOKEN,
     CONF_USER_ID,
+    CONF_MQTT_CLIENT_ID,
     DOMAIN,
     PLATFORMS,
 )
@@ -38,7 +39,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     token = entry.data.get(CONF_TOKEN)
     user_id = entry.data.get(CONF_USER_ID)
     cloud_token = entry.data.get("cloud_token")
-    mqtt_client_id = entry.data.get("mqtt_client_id")
+    mqtt_client_id = entry.options.get(CONF_MQTT_CLIENT_ID) or entry.data.get(CONF_MQTT_CLIENT_ID)
 
     client = IfbCloudClient(
         token=token,
