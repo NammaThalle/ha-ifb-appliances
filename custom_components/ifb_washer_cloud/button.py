@@ -48,6 +48,8 @@ async def async_setup_entry(
                 IfbStartButton(coordinator, client, device, dev_settings),
                 IfbPauseButton(coordinator, client, device),
                 IfbCancelButton(coordinator, client, device),
+                IfbChildLockButton(coordinator, client, device),
+                IfbChildUnlockButton(coordinator, client, device),
                 IfbRefreshButton(coordinator, client, device),
             ]
         )
@@ -211,3 +213,53 @@ class IfbRefreshButton(IfbBaseButton):
     async def async_press(self) -> None:
         """Handle button press."""
         await self.coordinator.async_request_refresh()
+
+
+class IfbChildLockButton(IfbBaseButton):
+    """Button to engage child lock on running cycle."""
+
+    _attr_icon = "mdi:lock"
+
+    def __init__(
+        self,
+        coordinator: IfbWasherCoordinator,
+        client: IfbCloudClient,
+        device: IfbDevice,
+    ) -> None:
+        super().__init__(coordinator, client, device)
+        self._attr_name = f"{device.name} Child Lock"
+        self._attr_unique_id = f"{device.mac}_child_lock"
+
+    async def async_press(self) -> None:
+        """Handle button press."""
+        _LOGGER.warning("Sending Child Lock command to %s", self.mac)
+        try:
+            await self.client.child_lock(self.mac, serial=self.device.serial_number)
+            await self.coordinator.async_request_refresh()
+        except IfbError as err:
+            raise HomeAssistantError(f"Failed to engage Child Lock on IFB washer: {err}") from err
+
+
+class IfbChildUnlockButton(IfbBaseButton):
+    """Button to disengage child lock on running cycle."""
+
+    _attr_icon = "mdi:lock-open"
+
+    def __init__(
+        self,
+        coordinator: IfbWasherCoordinator,
+        client: IfbCloudClient,
+        device: IfbDevice,
+    ) -> None:
+        super().__init__(coordinator, client, device)
+        self._attr_name = f"{device.name} Child Unlock"
+        self._attr_unique_id = f"{device.mac}_child_unlock"
+
+    async def async_press(self) -> None:
+        """Handle button press."""
+        _LOGGER.warning("Sending Child Unlock command to %s", self.mac)
+        try:
+            await self.client.child_unlock(self.mac, serial=self.device.serial_number)
+            await self.coordinator.async_request_refresh()
+        except IfbError as err:
+            raise HomeAssistantError(f"Failed to disengage Child Lock on IFB washer: {err}") from err
