@@ -57,7 +57,7 @@ class TestIfbModels(unittest.TestCase):
         self.assertEqual(prog.mac, "aa:bb:cc:dd:ee:ff")
         self.assertTrue(prog.is_running)
         self.assertEqual(prog.state, MachineState.MAIN_WASH)
-        self.assertEqual(prog.program_name, "Mix / Daily")
+        self.assertEqual(prog.program_name, "Wash+Dry 2Hr")
         self.assertEqual(prog.time_remaining_minutes, 35)
         self.assertEqual(prog.total_time_minutes, 60)
         self.assertEqual(prog.progress_percentage, 41)

@@ -550,14 +550,35 @@ class IfbCloudClient:
 
         return device_list
 
-    async def get_device_progress(self, mac: str) -> IfbCycleProgress:
-        """Fetch current telemetry for appliance."""
+    async def get_device_progress(
+        self,
+        mac: str,
+        serial: Optional[str] = None,
+        direct_mqtt: bool = False,
+    ) -> IfbCycleProgress:
+        """Fetch current telemetry for appliance.
+
+        By default, uses the cloud REST API (v5 device/smart/progress and device/all)
+        to avoid MQTT Client ID collisions with the official MyIFB mobile app.
+        Direct MQTT query via CMD_READ_STATE is only performed when direct_mqtt=True.
+        """
         clean_mac = mac.strip().lower()
         if not MAC_REGEX.match(clean_mac):
             _LOGGER.debug("Invalid MAC address syntax: %s", mac)
             return IfbCycleProgress(mac=clean_mac, is_running=False, state=MachineState.STANDBY)
 
-        serial_no = self._device_serials.get(clean_mac)
+        serial_no = serial or self._device_serials.get(clean_mac)
+        if serial_no:
+            self._device_serials[clean_mac] = serial_no
+
+        # 0. On-demand direct MQTT query (only when explicitly requested, e.g. manual refresh)
+        if direct_mqtt and self._mqtt_client_id:
+            try:
+                live_progress = await self.read_machine_state(clean_mac, serial=serial_no, timeout=2.0)
+                if live_progress is not None:
+                    return live_progress
+            except Exception as err:
+                _LOGGER.debug("Direct MQTT state query failed for %s: %s", clean_mac, err)
 
         # 1. Primary: Query v5 device/smart/progress
         try:
@@ -795,6 +816,102 @@ class IfbCloudClient:
             )
 
         return await asyncio.to_thread(_publish_mqtt)
+
+    async def read_machine_state(
+        self,
+        mac: str,
+        serial: Optional[str] = None,
+        timeout: float = 2.0,
+    ) -> Optional[IfbCycleProgress]:
+        """Request live machine state via MQTT CMD_READ_STATE and await binary telemetry response."""
+        clean_mac = mac.strip().lower()
+        if not MAC_REGEX.match(clean_mac):
+            return None
+
+        if serial:
+            self._device_serials[clean_mac] = serial
+
+        def _query_mqtt() -> Optional[IfbCycleProgress]:
+            import ssl
+            import time
+            import paho.mqtt.client as mqtt
+
+            client_id, username, password = self._resolve_mqtt_credentials(clean_mac)
+
+            mac_oui = clean_mac[:8].lower()
+            if mac_oui == "20:f8:5e":
+                endpoints = [(MQTT_GAINSPAN_HOST, MQTT_GAINSPAN_PORT)]
+            else:
+                endpoints = [(MQTT_ESP_HOST, MQTT_ESP_PORT), (MQTT_GAINSPAN_HOST, MQTT_GAINSPAN_PORT)]
+
+            cmd_frame = IfbFrameBuilder.read_state()
+            topic = f"Command/{clean_mac}"
+            resp_topic = f"Response/{clean_mac}"
+
+            for host, port in endpoints:
+                client = None
+                try:
+                    try:
+                        client = mqtt.Client(
+                            mqtt.CallbackAPIVersion.VERSION2,
+                            client_id=client_id,
+                        )
+                    except Exception:
+                        client = mqtt.Client(client_id=client_id)
+
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                    client.tls_set_context(ctx)
+                    client.username_pw_set(username, password)
+
+                    received_progress: list[Optional[IfbCycleProgress]] = [None]
+                    connected = [False]
+
+                    def on_connect(c, userdata, flags, rc, props=None):
+                        if (hasattr(rc, "is_failure") and not rc.is_failure) or rc == 0:
+                            connected[0] = True
+                            c.subscribe(resp_topic, qos=0)
+                            c.publish(topic, cmd_frame, qos=0, retain=False)
+
+                    def on_message(c, userdata, msg):
+                        try:
+                            decoded = decode_frame(msg.payload)
+                            if decoded is not None:
+                                received_progress[0] = IfbCycleProgress.from_decoded_frame(clean_mac, decoded)
+                        except Exception as parse_err:
+                            _LOGGER.debug("Error parsing live MQTT telemetry: %s", parse_err)
+
+                    client.on_connect = on_connect
+                    client.on_message = on_message
+
+                    client.connect(host, port, keepalive=10)
+                    client.loop_start()
+
+                    start_t = time.time()
+                    while time.time() - start_t < timeout:
+                        if received_progress[0] is not None:
+                            break
+                        time.sleep(0.05)
+
+                    client.loop_stop()
+                    client.disconnect()
+
+                    if received_progress[0] is not None:
+                        return received_progress[0]
+                except Exception as ex:
+                    _LOGGER.debug("read_machine_state failed on %s:%s: %s", host, port, ex)
+                finally:
+                    if client is not None:
+                        try:
+                            client.loop_stop()
+                            client.disconnect()
+                        except Exception:
+                            pass
+
+            return None
+
+        return await asyncio.to_thread(_query_mqtt)
 
     async def start(
         self,

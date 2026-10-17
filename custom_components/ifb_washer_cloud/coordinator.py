@@ -36,6 +36,7 @@ class IfbWasherCoordinator(DataUpdateCoordinator[Dict[str, IfbCycleProgress]]):
         hass: HomeAssistant,
         client: IfbCloudClient,
         devices: Dict[str, IfbDevice],
+        settings: Optional[Dict[str, Dict[str, int]]] = None,
     ) -> None:
         """Initialize the coordinator."""
         super().__init__(
@@ -46,6 +47,7 @@ class IfbWasherCoordinator(DataUpdateCoordinator[Dict[str, IfbCycleProgress]]):
         )
         self.client = client
         self.devices = devices
+        self.settings = settings if settings is not None else {}
         self._is_any_running = False
 
     async def _async_update_data(self) -> Dict[str, IfbCycleProgress]:
@@ -55,11 +57,22 @@ class IfbWasherCoordinator(DataUpdateCoordinator[Dict[str, IfbCycleProgress]]):
 
         for mac, device in self.devices.items():
             try:
-                progress = await self.client.get_device_progress(mac)
+                progress = await self.client.get_device_progress(mac, serial=device.serial_number)
             except Exception as err:
                 _LOGGER.debug("Could not fetch progress for device %s: %s", mac, err)
                 progress = IfbCycleProgress(mac=mac, is_running=False, state=MachineState.STANDBY)
             progress_data[mac] = progress
+
+            # Automatically update live dropdown settings if machine reported non-zero program
+            if progress and progress.program_code and mac in self.settings:
+                self.settings[mac]["program"] = progress.program_code
+                if progress.temp_idx is not None:
+                    self.settings[mac]["temp"] = progress.temp_idx
+                if progress.spin_idx is not None:
+                    self.settings[mac]["spin"] = progress.spin_idx
+                if progress.dry_mode_code is not None:
+                    self.settings[mac]["dry"] = progress.dry_mode_code
+
             if progress.is_running:
                 any_running = True
 
