@@ -61,6 +61,54 @@ class TestIfbFrameBuilder(unittest.TestCase):
         self.assertEqual(frame[10], c1)
         self.assertEqual(frame[11], c2)
 
+    def test_read_state_frame_structure(self):
+        """Verify Read State command frame."""
+        frame = IfbFrameBuilder.read_state()
+        self.assertEqual(len(frame), 12)
+        self.assertEqual(frame[0], 99)
+        self.assertEqual(frame[5], 7)  # Read state opcode
+        c1, c2 = calculate_checksum(bytes(frame[:10]))
+        self.assertEqual(frame[10], c1)
+        self.assertEqual(frame[11], c2)
+
+    def test_child_lock_frame_structure(self):
+        """Verify Child Lock and Unlock binary command frames."""
+        lock_frame = IfbFrameBuilder.child_lock()
+        self.assertEqual(len(lock_frame), 12)
+        self.assertEqual(lock_frame[4], 11)
+        self.assertEqual(lock_frame[5], 1)
+        c1, c2 = calculate_checksum(bytes(lock_frame[:10]))
+        self.assertEqual(lock_frame[10], c1)
+        self.assertEqual(lock_frame[11], c2)
+
+        unlock_frame = IfbFrameBuilder.child_unlock()
+        self.assertEqual(len(unlock_frame), 12)
+        self.assertEqual(unlock_frame[4], 11)
+        self.assertEqual(unlock_frame[5], 0)
+        c1, c2 = calculate_checksum(bytes(unlock_frame[:10]))
+        self.assertEqual(unlock_frame[10], c1)
+        self.assertEqual(unlock_frame[11], c2)
+
+    def test_decode_56_byte_telemetry_frame(self):
+        """Verify decoding of a real 56-byte ESP32 response frame."""
+        from ifb_cloud.frame import decode_frame
+        # Captured live telemetry frame from physical washer
+        raw = bytes([
+            99, 56, 1, 0, 1, 1, 1, 0, 6, 0, 2, 0, 0, 0, 0, 0,
+            0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 1, 0,
+            0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 69, 242
+        ])
+        decoded = decode_frame(raw)
+        self.assertIsNotNone(decoded)
+        self.assertEqual(decoded.program_code, 1)  # Mixed Soiled
+        self.assertEqual(decoded.set_spin_rpm, 1400)     # index 6 -> 1400
+        self.assertEqual(decoded.set_temperature_c, 30)      # index 2 -> 30C
+        self.assertEqual(decoded.dry_mode, 7)       # Time Dry 120 Min
+        self.assertEqual(decoded.remaining_seconds, 7200) # 2h 0m -> 7200s
+        self.assertFalse(decoded.child_lock)
+        self.assertTrue(decoded.door_locked)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -99,6 +99,9 @@ class IfbCycleProgress:
     soak_active: bool = False
     steam_active: bool = False
     extra_rinse_count: int = 0
+    temp_idx: int = 0
+    spin_idx: int = 0
+    dry_mode_code: int = 0
     error_code: Optional[str] = None
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
@@ -185,19 +188,27 @@ class IfbCycleProgress:
         remaining_min = (frame.remaining_seconds + 59) // 60 if frame.remaining_seconds > 0 else 0
         total_min = (frame.total_seconds + 59) // 60 if frame.total_seconds > 0 else 0
 
-        # Set spin speed label from RPM value
+        # Resolve spin speed and index
         spin_rpm = frame.set_spin_rpm
-        if spin_rpm == 0:
-            spin_label = "No Spin"
+        spin_speeds_table = [0, 400, 600, 800, 1000, 1200, 1400]
+        if spin_rpm in spin_speeds_table:
+            spin_idx = spin_speeds_table.index(spin_rpm)
         else:
-            spin_label = f"{spin_rpm} RPM"
+            spin_idx = 4
+        spin_label = "No Spin" if spin_rpm == 0 else f"{spin_rpm} RPM"
 
-        # Set temperature label
+        # Resolve temperature and index
         temp_c = frame.set_temperature_c
-        if temp_c == 0:
-            temp_label = "Cold"
+        temp_table = [0, 20, 30, 40, 60, 95]
+        if temp_c in temp_table:
+            temp_idx = temp_table.index(temp_c)
         else:
-            temp_label = f"{temp_c}°C"
+            temp_idx = 3
+        temp_label = "Cold" if temp_c == 0 else f"{temp_c}°C"
+
+        # Resolve dry mode
+        dry_code = getattr(frame, "dry_mode", 0)
+        dry_label = DRY_MODES.get(dry_code, "No Dry")
 
         # Error: alarm bytes non-zero
         error_code: Optional[str] = None
@@ -217,7 +228,10 @@ class IfbCycleProgress:
             water_temperature_c=frame.water_temperature_c,
             selected_spin_speed=spin_label,
             selected_temperature=temp_label,
-            selected_dry_mode="No Dry",  # dry mode is encoded in option bits; default safe value
+            selected_dry_mode=dry_label,
+            temp_idx=temp_idx,
+            spin_idx=spin_idx,
+            dry_mode_code=dry_code,
             door_locked=frame.door_locked,
             child_lock_active=frame.child_lock,
             prewash_active=frame.prewash_active,
@@ -235,5 +249,6 @@ class IfbCycleProgress:
                 "alarm2": frame.alarm2,
                 "remaining_seconds": frame.remaining_seconds,
                 "total_seconds": frame.total_seconds,
+                "dry_mode": dry_code,
             },
         )

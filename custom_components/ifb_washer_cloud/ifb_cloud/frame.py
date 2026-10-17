@@ -139,6 +139,7 @@ class DecodedFrame:
     option_enable: int
     user_control: int
     previous_state: int
+    dry_mode: int
     raw: bytes
 
 
@@ -159,13 +160,29 @@ def decode_frame(data: bytes) -> Optional[DecodedFrame]:
     is_paused = state_code == 14
 
     program_code = data[6] & 0xFF
-    set_spin_rpm = ((data[8] & 0xFF) << 8) | (data[9] & 0xFF)
-    set_temp = data[10] & 0xFF
 
-    # balanceTime = remaining time; AppConstants.Minutes = 60
+    # Spin speed: if data[8] <= 6 and data[9] == 0, it is an index into SPIN_SPEEDS table
+    spin_hi = data[8] & 0xFF
+    spin_lo = data[9] & 0xFF
+    spin_table = [0, 400, 600, 800, 1000, 1200, 1400]
+    if spin_hi < len(spin_table) and spin_lo == 0:
+        set_spin_rpm = spin_table[spin_hi]
+    else:
+        set_spin_rpm = (spin_hi << 8) | spin_lo
+
+    # Temperature: if data[10] <= 5, it is an index into TEMPERATURES table
+    temp_raw = data[10] & 0xFF
+    temp_table = [0, 20, 30, 40, 60, 95]
+    if temp_raw < len(temp_table):
+        set_temp = temp_table[temp_raw]
+    else:
+        set_temp = temp_raw
+
+    # balanceTime = remaining time; balanceTimeHigh is hours, balanceTimeLow is minutes
     bal_hi = data[17] & 0xFF
     bal_lo = data[18] & 0xFF
-    remaining_seconds = bal_hi * 60 + bal_lo
+    remaining_minutes = bal_hi * 60 + bal_lo
+    remaining_seconds = remaining_minutes * 60
 
     motor_hi = data[19] & 0xFF
     motor_lo = data[20] & 0xFF
@@ -173,9 +190,11 @@ def decode_frame(data: bytes) -> Optional[DecodedFrame]:
 
     water_temp = data[21] & 0xFF
 
+    # programTime = total cycle duration; programTimeHigh is hours, programTimeLow is minutes
     prog_hi = data[32] & 0xFF
     prog_lo = data[33] & 0xFF
-    total_seconds = prog_hi * 60 + prog_lo
+    total_minutes = prog_hi * 60 + prog_lo
+    total_seconds = total_minutes * 60
 
     progress_pct = 0
     if total_seconds > 0 and remaining_seconds <= total_seconds:
@@ -195,6 +214,7 @@ def decode_frame(data: bytes) -> Optional[DecodedFrame]:
     option_enable = data[29] & 0xFF
     user_control = data[5] & 0xFF
     previous_state = data[34] & 0xFF
+    dry_mode = data[28] & 0xFF if len(data) > 28 else 0
 
     return DecodedFrame(
         state_code=state_code,
@@ -221,6 +241,7 @@ def decode_frame(data: bytes) -> Optional[DecodedFrame]:
         option_enable=option_enable,
         user_control=user_control,
         previous_state=previous_state,
+        dry_mode=dry_mode,
         raw=bytes(data),
     )
 

@@ -83,20 +83,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = IfbWasherCoordinator(hass, client, devices)
     await coordinator.async_config_entry_first_refresh()
 
+    initial_settings: Dict[str, Dict[str, int]] = {}
+    for mac in devices:
+        prog = coordinator.data.get(mac) if coordinator.data else None
+        p_code = prog.program_code if (prog and prog.program_code) else 1
+        p_temp = prog.temp_idx if (prog and prog.temp_idx is not None) else 3
+        p_spin = prog.spin_idx if (prog and prog.spin_idx is not None) else 4
+        p_dry = prog.dry_mode_code if (prog and prog.dry_mode_code is not None) else 0
+        initial_settings[mac] = {
+            "program": p_code,
+            "temp": p_temp,
+            "spin": p_spin,
+            "dry": p_dry,
+        }
+
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "client": client,
         "coordinator": coordinator,
         "devices": devices,
-        "settings": {
-            mac: {
-                "program": 1,
-                "temp": 3,
-                "spin": 4,
-                "dry": 0,
-            }
-            for mac in devices
-        },
+        "settings": initial_settings,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

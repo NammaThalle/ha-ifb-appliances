@@ -17,11 +17,11 @@ from .coordinator import IfbWasherCoordinator
 
 try:
     from .ifb_cloud.client import IfbCloudClient
-    from .ifb_cloud.const import DRY_MODES, PROGRAM_NAMES, SPIN_SPEEDS, TEMPERATURES
+    from .ifb_cloud.const import DRY_MODES, PROGRAM_NAMES, PROGRAM_PROFILES, SPIN_SPEEDS, TEMPERATURES
     from .ifb_cloud.models import IfbCycleProgress, IfbDevice
 except ImportError:
     from ifb_cloud.client import IfbCloudClient
-    from ifb_cloud.const import DRY_MODES, PROGRAM_NAMES, SPIN_SPEEDS, TEMPERATURES
+    from ifb_cloud.const import DRY_MODES, PROGRAM_NAMES, PROGRAM_PROFILES, SPIN_SPEEDS, TEMPERATURES
     from ifb_cloud.models import IfbCycleProgress, IfbDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -113,7 +113,9 @@ class IfbProgramSelect(IfbBaseSelect):
 
     @property
     def current_option(self) -> Optional[str]:
-        if self.progress and self.progress.is_running and self.progress.program_name in self.options:
+        if self.progress and self.progress.program_name and self.progress.program_name in self.options:
+            if self.progress.program_code:
+                self.settings["program"] = self.progress.program_code
             return self.progress.program_name
         code = self.settings.get("program", 1)
         return PROGRAM_NAMES.get(code, self.options[0])
@@ -123,6 +125,9 @@ class IfbProgramSelect(IfbBaseSelect):
         if option in PROG_NAME_TO_CODE:
             code = PROG_NAME_TO_CODE[option]
             self.settings["program"] = code
+            if self.progress:
+                self.progress.program_code = code
+                self.progress.program_name = option
             self.async_write_ha_state()
 
             if not (self.progress and self.progress.is_running):
@@ -153,22 +158,36 @@ class IfbSpinSpeedSelect(IfbBaseSelect):
         super().__init__(coordinator, client, device, settings)
         self._attr_name = f"{device.name} Spin Speed"
         self._attr_unique_id = f"{device.mac}_spin_select"
-        self._attr_options = list(SPIN_SPEEDS)
+
+    @property
+    def options(self) -> List[str]:
+        prog_code = self.settings.get("program", 1)
+        if self.progress and self.progress.program_code:
+            prog_code = self.progress.program_code
+        profile = PROGRAM_PROFILES.get(prog_code)
+        if profile and "spins" in profile:
+            return profile["spins"]
+        return list(SPIN_SPEEDS)
 
     @property
     def current_option(self) -> Optional[str]:
-        if self.progress and self.progress.is_running and self.progress.selected_spin_speed in self.options:
+        if self.progress and self.progress.selected_spin_speed in self.options:
+            if self.progress.spin_idx is not None:
+                self.settings["spin"] = self.progress.spin_idx
             return self.progress.selected_spin_speed
         idx = self.settings.get("spin", 4)
-        if 0 <= idx < len(SPIN_SPEEDS):
+        if 0 <= idx < len(SPIN_SPEEDS) and SPIN_SPEEDS[idx] in self.options:
             return SPIN_SPEEDS[idx]
-        return self.options[4]
+        return self.options[0] if self.options else None
 
     async def async_select_option(self, option: str) -> None:
         """Change selected spin speed."""
         if option in SPIN_NAME_TO_CODE:
             spin_code = SPIN_NAME_TO_CODE[option]
             self.settings["spin"] = spin_code
+            if self.progress:
+                self.progress.spin_idx = spin_code
+                self.progress.selected_spin_speed = option
             self.async_write_ha_state()
 
             if not (self.progress and self.progress.is_running):
@@ -199,22 +218,36 @@ class IfbTemperatureSelect(IfbBaseSelect):
         super().__init__(coordinator, client, device, settings)
         self._attr_name = f"{device.name} Temperature"
         self._attr_unique_id = f"{device.mac}_temp_select"
-        self._attr_options = list(TEMPERATURES)
+
+    @property
+    def options(self) -> List[str]:
+        prog_code = self.settings.get("program", 1)
+        if self.progress and self.progress.program_code:
+            prog_code = self.progress.program_code
+        profile = PROGRAM_PROFILES.get(prog_code)
+        if profile and "temps" in profile:
+            return profile["temps"]
+        return list(TEMPERATURES)
 
     @property
     def current_option(self) -> Optional[str]:
-        if self.progress and self.progress.is_running and self.progress.selected_temperature in self.options:
+        if self.progress and self.progress.selected_temperature in self.options:
+            if self.progress.temp_idx is not None:
+                self.settings["temp"] = self.progress.temp_idx
             return self.progress.selected_temperature
         idx = self.settings.get("temp", 3)
-        if 0 <= idx < len(TEMPERATURES):
+        if 0 <= idx < len(TEMPERATURES) and TEMPERATURES[idx] in self.options:
             return TEMPERATURES[idx]
-        return self.options[3]
+        return self.options[0] if self.options else None
 
     async def async_select_option(self, option: str) -> None:
         """Change selected temperature."""
         if option in TEMP_NAME_TO_CODE:
             temp_code = TEMP_NAME_TO_CODE[option]
             self.settings["temp"] = temp_code
+            if self.progress:
+                self.progress.temp_idx = temp_code
+                self.progress.selected_temperature = option
             self.async_write_ha_state()
 
             if not (self.progress and self.progress.is_running):
@@ -245,17 +278,33 @@ class IfbDryModeSelect(IfbBaseSelect):
         super().__init__(coordinator, client, device, settings)
         self._attr_name = f"{device.name} Dry Mode"
         self._attr_unique_id = f"{device.mac}_dry_select"
-        self._attr_options = list(DRY_MODES.values())
+
+    @property
+    def options(self) -> List[str]:
+        prog_code = self.settings.get("program", 1)
+        if self.progress and self.progress.program_code:
+            prog_code = self.progress.program_code
+        profile = PROGRAM_PROFILES.get(prog_code)
+        if profile and not profile.get("dry", True):
+            return ["Disabled"]
+        return list(DRY_MODES.values())
 
     @property
     def current_option(self) -> Optional[str]:
-        if self.progress and self.progress.is_running and self.progress.selected_dry_mode in self.options:
+        if self.progress and self.progress.selected_dry_mode in self.options:
+            if self.progress.dry_mode_code is not None:
+                self.settings["dry"] = self.progress.dry_mode_code
             return self.progress.selected_dry_mode
         code = self.settings.get("dry", 0)
-        return DRY_MODES.get(code, self.options[0])
+        mode = DRY_MODES.get(code, self.options[0])
+        return mode if mode in self.options else self.options[0]
 
     async def async_select_option(self, option: str) -> None:
         """Change selected drying mode."""
         if option in DRY_MODE_TO_CODE:
-            self.settings["dry"] = DRY_MODE_TO_CODE[option]
+            dry_code = DRY_MODE_TO_CODE[option]
+            self.settings["dry"] = dry_code
+            if self.progress:
+                self.progress.dry_mode_code = dry_code
+                self.progress.selected_dry_mode = option
             self.async_write_ha_state()

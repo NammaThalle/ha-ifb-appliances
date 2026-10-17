@@ -58,8 +58,7 @@ class IfbDevice:
         name = str(data.get("name") or data.get("deviceName") or data.get("alias") or "IFB Appliance")
         model = str(data.get("model") or data.get("modelName") or data.get("machineModel") or "IFB Appliance")
         serial = data.get("serialNumber") or data.get("srNo") or data.get("serial")
-        is_online = bool(data.get("isOnline") or str(data.get("status", "")).lower() == "online" or data.get("online", False))
-        category = data.get("applianceType") or data.get("category") or data.get("deviceCategory") or "Washer Dryer"
+        is_online = bool(data.get("isOnline") or data.get("status") == "online" or data.get("online", False))
         
         # Hardware type: GainSpan Wi-Fi module IEEE OUI prefix is 20:f8:5e; modern IFB appliances use ESP32/ESP8266
         hw_type = "gainspan" if mac.startswith("20:f8:5e") or str(data.get("moduleType", "")).lower() == "gainspan" else "esp"
@@ -70,7 +69,7 @@ class IfbDevice:
             model_name=model,
             device_id=data.get("deviceId") or data.get("id") or data.get("_id"),
             serial_number=str(serial) if serial else None,
-            category=category,
+            category=data.get("category") or data.get("deviceCategory") or "Washer Dryer",
             is_online=is_online,
             hardware_type=hw_type,
             firmware_version=data.get("firmwareVersion") or data.get("swVersion"),
@@ -100,6 +99,9 @@ class IfbCycleProgress:
     soak_active: bool = False
     steam_active: bool = False
     extra_rinse_count: int = 0
+    temp_idx: int = 0
+    spin_idx: int = 0
+    dry_mode_code: int = 0
     error_code: Optional[str] = None
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
@@ -111,45 +113,31 @@ class IfbCycleProgress:
     @classmethod
     def from_api_dict(cls, mac: str, data: Dict[str, Any]) -> "IfbCycleProgress":
         """Parse cycle progress from API dictionary or binary frame."""
-        raw_state_val = data.get("state") if data.get("state") is not None else data.get("machineState")
-        state = MachineState.STANDBY
-        
-        if isinstance(raw_state_val, int):
-            state = _STATE_CODE_MAP.get(raw_state_val, MachineState.STANDBY)
-        elif raw_state_val is not None:
-            raw_state = str(raw_state_val).lower()
-            if "wash" in raw_state and "pre" not in raw_state:
-                state = MachineState.MAIN_WASH
-            elif "rinse" in raw_state:
-                state = MachineState.RINSING
-            elif "spin" in raw_state:
-                state = MachineState.SPINNING
-            elif "dry" in raw_state or "cool" in raw_state:
-                state = MachineState.DRYING
-            elif "steam" in raw_state:
-                state = MachineState.STEAM
-            elif "pause" in raw_state:
-                state = MachineState.PAUSED
-            elif "complete" in raw_state or "finish" in raw_state or "end" in raw_state:
-                state = MachineState.COMPLETE
-            elif "error" in raw_state:
-                state = MachineState.ERROR
-
         # Check running state
-        is_running = bool(
-            data.get("running")
-            or data.get("isRunning")
-            or data.get("runState", 0) == 1
-            or state in {
-                MachineState.MAIN_WASH,
-                MachineState.PREWASH,
-                MachineState.RINSING,
-                MachineState.SPINNING,
-                MachineState.DRYING,
-                MachineState.STEAM,
-                MachineState.SOAK,
-            }
-        )
+        is_running = bool(data.get("running") or data.get("isRunning") or data.get("runState", 0) == 1)
+        
+        # State mapping
+        raw_state = str(data.get("state") or data.get("machineState") or "standby").lower()
+        if "wash" in raw_state and "pre" not in raw_state:
+            state = MachineState.MAIN_WASH
+        elif "rinse" in raw_state:
+            state = MachineState.RINSING
+        elif "spin" in raw_state:
+            state = MachineState.SPINNING
+        elif "dry" in raw_state:
+            state = MachineState.DRYING
+        elif "steam" in raw_state:
+            state = MachineState.STEAM
+        elif "pause" in raw_state:
+            state = MachineState.PAUSED
+        elif "complete" in raw_state or "finish" in raw_state:
+            state = MachineState.COMPLETE
+        elif "error" in raw_state:
+            state = MachineState.ERROR
+        elif is_running:
+            state = MachineState.MAIN_WASH
+        else:
+            state = MachineState.STANDBY
 
         prog_code = int(data.get("programCode") or data.get("program") or 0)
         prog_name = PROGRAM_NAMES.get(prog_code, str(data.get("programName") or "Custom"))
@@ -200,19 +188,27 @@ class IfbCycleProgress:
         remaining_min = (frame.remaining_seconds + 59) // 60 if frame.remaining_seconds > 0 else 0
         total_min = (frame.total_seconds + 59) // 60 if frame.total_seconds > 0 else 0
 
-        # Set spin speed label from RPM value
+        # Resolve spin speed and index
         spin_rpm = frame.set_spin_rpm
-        if spin_rpm == 0:
-            spin_label = "No Spin"
+        spin_speeds_table = [0, 400, 600, 800, 1000, 1200, 1400]
+        if spin_rpm in spin_speeds_table:
+            spin_idx = spin_speeds_table.index(spin_rpm)
         else:
-            spin_label = f"{spin_rpm} RPM"
+            spin_idx = 4
+        spin_label = "No Spin" if spin_rpm == 0 else f"{spin_rpm} RPM"
 
-        # Set temperature label
+        # Resolve temperature and index
         temp_c = frame.set_temperature_c
-        if temp_c == 0:
-            temp_label = "Cold"
+        temp_table = [0, 20, 30, 40, 60, 95]
+        if temp_c in temp_table:
+            temp_idx = temp_table.index(temp_c)
         else:
-            temp_label = f"{temp_c}°C"
+            temp_idx = 3
+        temp_label = "Cold" if temp_c == 0 else f"{temp_c}°C"
+
+        # Resolve dry mode
+        dry_code = getattr(frame, "dry_mode", 0)
+        dry_label = DRY_MODES.get(dry_code, "No Dry")
 
         # Error: alarm bytes non-zero
         error_code: Optional[str] = None
@@ -232,7 +228,10 @@ class IfbCycleProgress:
             water_temperature_c=frame.water_temperature_c,
             selected_spin_speed=spin_label,
             selected_temperature=temp_label,
-            selected_dry_mode="No Dry",  # dry mode is encoded in option bits; default safe value
+            selected_dry_mode=dry_label,
+            temp_idx=temp_idx,
+            spin_idx=spin_idx,
+            dry_mode_code=dry_code,
             door_locked=frame.door_locked,
             child_lock_active=frame.child_lock,
             prewash_active=frame.prewash_active,
@@ -250,5 +249,6 @@ class IfbCycleProgress:
                 "alarm2": frame.alarm2,
                 "remaining_seconds": frame.remaining_seconds,
                 "total_seconds": frame.total_seconds,
+                "dry_mode": dry_code,
             },
         )
