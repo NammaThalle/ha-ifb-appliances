@@ -550,8 +550,18 @@ class IfbCloudClient:
 
         return device_list
 
-    async def get_device_progress(self, mac: str, serial: Optional[str] = None) -> IfbCycleProgress:
-        """Fetch current telemetry for appliance."""
+    async def get_device_progress(
+        self,
+        mac: str,
+        serial: Optional[str] = None,
+        direct_mqtt: bool = False,
+    ) -> IfbCycleProgress:
+        """Fetch current telemetry for appliance.
+
+        By default, uses the cloud REST API (v5 device/smart/progress and device/all)
+        to avoid MQTT Client ID collisions with the official MyIFB mobile app.
+        Direct MQTT query via CMD_READ_STATE is only performed when direct_mqtt=True.
+        """
         clean_mac = mac.strip().lower()
         if not MAC_REGEX.match(clean_mac):
             _LOGGER.debug("Invalid MAC address syntax: %s", mac)
@@ -561,8 +571,8 @@ class IfbCloudClient:
         if serial_no:
             self._device_serials[clean_mac] = serial_no
 
-        # 0. High-fidelity: Query physical appliance directly via MQTT CMD_READ_STATE
-        if self._mqtt_client_id:
+        # 0. On-demand direct MQTT query (only when explicitly requested, e.g. manual refresh)
+        if direct_mqtt and self._mqtt_client_id:
             try:
                 live_progress = await self.read_machine_state(clean_mac, serial=serial_no, timeout=2.0)
                 if live_progress is not None:

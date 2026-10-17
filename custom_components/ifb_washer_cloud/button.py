@@ -212,6 +212,17 @@ class IfbRefreshButton(IfbBaseButton):
 
     async def async_press(self) -> None:
         """Handle button press."""
+        _LOGGER.info("Manual refresh requested for %s", self.mac)
+        try:
+            live_progress = await self.client.read_machine_state(
+                self.mac, serial=self.device.serial_number, timeout=2.5
+            )
+            if live_progress:
+                self.coordinator.data[self.mac] = live_progress
+                self.coordinator.async_set_updated_data(self.coordinator.data)
+                return
+        except Exception as err:
+            _LOGGER.debug("Manual MQTT state refresh failed: %s", err)
         await self.coordinator.async_request_refresh()
 
 
