@@ -65,25 +65,25 @@ class MachineState(str, Enum):
     ERROR = "error"
     UNKNOWN = "unknown"
 
-# Wash Programs Catalog - Specific to Washer-Dryer Models (applianceType == "WASHER_DRYER")
-# Reverse-engineered from MyIFB Washscreenfragment.java:1212-1383 and 1688-1736
+# Wash Programs Catalog - Specific to Washer-Dryer Models (e.g. Executive Plus ZBG 11/7/3)
+# Verified directly against physical machine firmware over MQTT
 WASHER_DRYER_PROGRAMS = {
-    0x01: "Mixed Soiled",
-    0x02: "Synthetic Daily",
-    0x03: "Cotton Normal",
-    0x04: "Cradle Wash",
-    0x05: "Bulky Beddings",
-    0x06: "Wash & Dry",
-    0x07: "Iron Ready",
-    0x08: "Additives / Rinse + Spin",
-    0x09: "Spin Dry",
-    0x0A: "Baby Wear",
-    0x0B: "Steam",
-    0x0C: "Refresh",
-    0x0D: "Woollens",
-    0x0E: "Express Wash",
-    0x0F: "Tub Clean",
-    0x11: "Deodorize",
+    # Left Dial
+    14: "Express 15'",
+    13: "Mix/Daily",
+    17: "Cotton",
+    8: "Synthetic",
+    9: "Anti-Allergen",
+    10: "Baby Wear",
+    11: "Bulky",
+    # Right Dial
+    1: "Wash+Dry 2Hr",
+    2: "Wash+Dry 4Hr",
+    5: "Spin & Dry",
+    4: "Refresh",
+    16: "PowerSteam®",
+    6: "CradleWash®",
+    7: "Wool",
 }
 
 # Standard Washing Machine Programs (applianceType == "WASHING_MACHINE")
@@ -105,27 +105,107 @@ WASHING_MACHINE_PROGRAMS = {
     0x0F: "Tub Clean",
 }
 
-# Default program mapping for washer dryers
-PROGRAM_NAMES = WASHER_DRYER_PROGRAMS
+# Default program mapping for washer dryers (with fallback for service/tub clean codes)
+PROGRAM_NAMES = {
+    **WASHER_DRYER_PROGRAMS,
+    3: "Cotton Eco",
+    12: "Eco Clean",
+    15: "Drain",
+    18: "Tub Clean",
+}
 
 # Program capability profiles defining allowable controls for each cycle
 PROGRAM_PROFILES = {
-    1: {"temps": ["Cold", "20°C", "30°C", "40°C", "60°C"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"], "dry": True, "steam": True},
-    2: {"temps": ["Cold", "20°C", "30°C", "40°C", "60°C"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM"], "dry": True, "steam": True},
-    3: {"temps": ["Cold", "20°C", "30°C", "40°C", "60°C", "95°C"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"], "dry": True, "steam": True},
-    4: {"temps": ["Cold", "20°C", "30°C", "40°C"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM"], "dry": False, "steam": False},
-    5: {"temps": ["Cold", "20°C", "30°C", "40°C", "60°C"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM"], "dry": True, "steam": True},
-    6: {"temps": ["Cold", "20°C", "30°C", "40°C", "60°C"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"], "dry": True, "steam": True},
-    7: {"temps": ["Cold", "20°C", "30°C", "40°C", "60°C"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"], "dry": True, "steam": True},
-    8: {"temps": ["Cold"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"], "dry": False, "steam": False},
-    9: {"temps": ["Cold"], "spins": ["400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"], "dry": False, "steam": False},
-    10: {"temps": ["40°C", "60°C", "95°C"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"], "dry": True, "steam": True},
-    11: {"temps": ["Cold", "20°C", "30°C", "40°C"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM"], "dry": False, "steam": True},
-    12: {"temps": ["Cold"], "spins": ["No Spin"], "dry": True, "steam": True},
-    13: {"temps": ["Cold", "20°C", "30°C"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM"], "dry": False, "steam": False},
-    14: {"temps": ["Cold", "20°C", "30°C", "40°C"], "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM"], "dry": False, "steam": False},
-    15: {"temps": ["95°C"], "spins": ["1400 RPM"], "dry": False, "steam": False},
-    17: {"temps": ["Cold"], "spins": ["No Spin"], "dry": True, "steam": False},
+    14: {  # Express 15'
+        "temps": ["Cold", "20°C", "30°C", "40°C"],
+        "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM"],
+        "dry": False,
+        "steam": False,
+    },
+    13: {  # Mix/Daily
+        "temps": ["Cold", "20°C", "30°C", "40°C", "60°C"],
+        "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"],
+        "dry": True,
+        "steam": True,
+    },
+    17: {  # Cotton
+        "temps": ["Cold", "20°C", "30°C", "40°C", "60°C", "95°C"],
+        "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"],
+        "dry": True,
+        "steam": True,
+    },
+    8: {  # Synthetic
+        "temps": ["Cold", "20°C", "30°C", "40°C", "60°C"],
+        "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM"],
+        "dry": True,
+        "steam": True,
+    },
+    9: {  # Anti-Allergen
+        "temps": ["40°C", "60°C", "95°C"],
+        "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"],
+        "dry": True,
+        "steam": True,
+    },
+    10: {  # Baby Wear
+        "temps": ["40°C", "60°C", "95°C"],
+        "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"],
+        "dry": True,
+        "steam": True,
+    },
+    11: {  # Bulky
+        "temps": ["Cold", "20°C", "30°C", "40°C", "60°C"],
+        "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM"],
+        "dry": True,
+        "steam": True,
+    },
+    1: {  # Wash+Dry 2Hr
+        "temps": ["Cold", "20°C", "30°C", "40°C"],
+        "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"],
+        "dry": True,
+        "steam": True,
+    },
+    2: {  # Wash+Dry 4Hr
+        "temps": ["Cold", "20°C", "30°C", "40°C", "60°C"],
+        "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"],
+        "dry": True,
+        "steam": True,
+    },
+    5: {  # Spin & Dry
+        "temps": ["Cold"],
+        "spins": ["400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"],
+        "dry": True,
+        "steam": False,
+    },
+    4: {  # Refresh
+        "temps": ["Cold"],
+        "spins": ["No Spin"],
+        "dry": True,
+        "steam": True,
+    },
+    16: {  # PowerSteam®
+        "temps": ["Cold", "20°C", "30°C", "40°C", "60°C"],
+        "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM"],
+        "dry": True,
+        "steam": True,
+    },
+    6: {  # CradleWash®
+        "temps": ["Cold", "20°C", "30°C", "40°C"],
+        "spins": ["No Spin", "400 RPM"],
+        "dry": False,
+        "steam": False,
+    },
+    7: {  # Wool
+        "temps": ["Cold", "20°C", "30°C", "40°C"],
+        "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM"],
+        "dry": False,
+        "steam": False,
+    },
+    18: {  # Tub Clean
+        "temps": ["95°C"],
+        "spins": ["1400 RPM"],
+        "dry": False,
+        "steam": False,
+    },
 }
 
 # Dry Modes for Washer-Dryer combo models

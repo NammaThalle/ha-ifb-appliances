@@ -17,16 +17,30 @@ from .coordinator import IfbWasherCoordinator
 
 try:
     from .ifb_cloud.client import IfbCloudClient
-    from .ifb_cloud.const import DRY_MODES, PROGRAM_NAMES, PROGRAM_PROFILES, SPIN_SPEEDS, TEMPERATURES
+    from .ifb_cloud.const import (
+        DRY_MODES,
+        PROGRAM_NAMES,
+        PROGRAM_PROFILES,
+        SPIN_SPEEDS,
+        TEMPERATURES,
+        WASHER_DRYER_PROGRAMS,
+    )
     from .ifb_cloud.models import IfbCycleProgress, IfbDevice
 except ImportError:
     from ifb_cloud.client import IfbCloudClient
-    from ifb_cloud.const import DRY_MODES, PROGRAM_NAMES, PROGRAM_PROFILES, SPIN_SPEEDS, TEMPERATURES
+    from ifb_cloud.const import (
+        DRY_MODES,
+        PROGRAM_NAMES,
+        PROGRAM_PROFILES,
+        SPIN_SPEEDS,
+        TEMPERATURES,
+        WASHER_DRYER_PROGRAMS,
+    )
     from ifb_cloud.models import IfbCycleProgress, IfbDevice
 
 _LOGGER = logging.getLogger(__name__)
 
-PROG_NAME_TO_CODE = {v: k for k, v in PROGRAM_NAMES.items()}
+PROG_NAME_TO_CODE = {v: k for k, v in WASHER_DRYER_PROGRAMS.items()}
 DRY_MODE_TO_CODE = {v: k for k, v in DRY_MODES.items()}
 SPIN_NAME_TO_CODE = {v: i for i, v in enumerate(SPIN_SPEEDS)}
 TEMP_NAME_TO_CODE = {v: i for i, v in enumerate(TEMPERATURES)}
@@ -109,7 +123,7 @@ class IfbProgramSelect(IfbBaseSelect):
         super().__init__(coordinator, client, device, settings)
         self._attr_name = f"{device.name} Program"
         self._attr_unique_id = f"{device.mac}_program_select"
-        self._attr_options = list(PROGRAM_NAMES.values())
+        self._attr_options = list(WASHER_DRYER_PROGRAMS.values())
 
     @property
     def current_option(self) -> Optional[str]:
@@ -117,8 +131,8 @@ class IfbProgramSelect(IfbBaseSelect):
             if self.progress.program_code:
                 self.settings["program"] = self.progress.program_code
             return self.progress.program_name
-        code = self.settings.get("program", 1)
-        return PROGRAM_NAMES.get(code, self.options[0])
+        code = self.settings.get("program", 14)
+        return WASHER_DRYER_PROGRAMS.get(code, self.options[0])
 
     async def async_select_option(self, option: str) -> None:
         """Change selected program."""
@@ -128,7 +142,40 @@ class IfbProgramSelect(IfbBaseSelect):
             if self.progress:
                 self.progress.program_code = code
                 self.progress.program_name = option
+
+            # Dynamically clamp temp/spin settings to profile limits
+            profile = PROGRAM_PROFILES.get(code)
+            if profile:
+                allowed_temps = profile.get("temps", TEMPERATURES)
+                cur_temp_idx = self.settings.get("temp", 3)
+                cur_temp_str = TEMPERATURES[cur_temp_idx] if cur_temp_idx < len(TEMPERATURES) else "40°C"
+                if cur_temp_str not in allowed_temps:
+                    new_temp_str = allowed_temps[0]
+                    new_idx = TEMP_NAME_TO_CODE.get(new_temp_str, 0)
+                    self.settings["temp"] = new_idx
+                    if self.progress:
+                        self.progress.temp_idx = new_idx
+                        self.progress.selected_temperature = new_temp_str
+
+                allowed_spins = profile.get("spins", SPIN_SPEEDS)
+                cur_spin_idx = self.settings.get("spin", 4)
+                cur_spin_str = SPIN_SPEEDS[cur_spin_idx] if cur_spin_idx < len(SPIN_SPEEDS) else "1000 RPM"
+                if cur_spin_str not in allowed_spins:
+                    new_spin_str = allowed_spins[-1]
+                    new_idx = SPIN_NAME_TO_CODE.get(new_spin_str, 0)
+                    self.settings["spin"] = new_idx
+                    if self.progress:
+                        self.progress.spin_idx = new_idx
+                        self.progress.selected_spin_speed = new_spin_str
+
+                if not profile.get("dry", True):
+                    self.settings["dry"] = 0
+                    if self.progress:
+                        self.progress.dry_mode_code = 0
+                        self.progress.selected_dry_mode = "No Dry"
+
             self.async_write_ha_state()
+            self.coordinator.async_update_listeners()
 
             if not (self.progress and self.progress.is_running):
                 try:
@@ -281,12 +328,12 @@ class IfbDryModeSelect(IfbBaseSelect):
 
     @property
     def options(self) -> List[str]:
-        prog_code = self.settings.get("program", 1)
+        prog_code = self.settings.get("program", 14)
         if self.progress and self.progress.program_code:
             prog_code = self.progress.program_code
         profile = PROGRAM_PROFILES.get(prog_code)
         if profile and not profile.get("dry", True):
-            return ["Disabled"]
+            return ["No Dry"]
         return list(DRY_MODES.values())
 
     @property

@@ -63,6 +63,8 @@ class IfbChildLockSwitch(CoordinatorEntity[IfbWasherCoordinator], SwitchEntity):
         self._attr_name = f"{device.name} Child Lock"
         self._attr_unique_id = f"{device.mac}_child_lock_switch"
 
+        self._optimistic_state: Optional[bool] = None
+
     @property
     def progress(self) -> Optional[IfbCycleProgress]:
         """Return the latest cycle progress for this appliance."""
@@ -71,8 +73,14 @@ class IfbChildLockSwitch(CoordinatorEntity[IfbWasherCoordinator], SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return True if Child Lock is active."""
-        if self.progress:
-            return bool(self.progress.child_lock_active)
+        if self.progress and self.progress.child_lock_active:
+            self._optimistic_state = True
+            return True
+        if self._optimistic_state is not None:
+            if self.progress and self.progress.is_running:
+                self._optimistic_state = False
+                return False
+            return self._optimistic_state
         return False
 
     @property
@@ -89,22 +97,26 @@ class IfbChildLockSwitch(CoordinatorEntity[IfbWasherCoordinator], SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn on child lock."""
-        if not (self.progress and self.progress.is_running):
-            raise HomeAssistantError("Child Lock can only be engaged while a wash cycle is running.")
-        _LOGGER.warning("Sending Child Lock ON command to %s", self.mac)
+        self._optimistic_state = True
+        self.async_write_ha_state()
+        _LOGGER.info("Sending Child Lock ON command to %s", self.mac)
         try:
             await self.client.child_lock(self.mac, serial=self.device.serial_number)
             await self.coordinator.async_request_refresh()
         except IfbError as err:
+            self._optimistic_state = False
+            self.async_write_ha_state()
             raise HomeAssistantError(f"Failed to engage Child Lock on IFB washer: {err}") from err
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off child lock."""
-        if not (self.progress and self.progress.is_running):
-            raise HomeAssistantError("Child Lock can only be disengaged while a wash cycle is running.")
-        _LOGGER.warning("Sending Child Lock OFF command to %s", self.mac)
+        self._optimistic_state = False
+        self.async_write_ha_state()
+        _LOGGER.info("Sending Child Lock OFF command to %s", self.mac)
         try:
             await self.client.child_unlock(self.mac, serial=self.device.serial_number)
             await self.coordinator.async_request_refresh()
         except IfbError as err:
+            self._optimistic_state = True
+            self.async_write_ha_state()
             raise HomeAssistantError(f"Failed to disengage Child Lock on IFB washer: {err}") from err

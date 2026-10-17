@@ -232,9 +232,7 @@ class IfbChildLockButton(IfbBaseButton):
 
     async def async_press(self) -> None:
         """Handle button press."""
-        if not (self.progress and self.progress.is_running):
-            raise HomeAssistantError("Child Lock can only be engaged while a wash cycle is running.")
-        _LOGGER.warning("Sending Child Lock command to %s", self.mac)
+        _LOGGER.info("Sending Child Lock command to %s", self.mac)
         try:
             await self.client.child_lock(self.mac, serial=self.device.serial_number)
             await self.coordinator.async_request_refresh()
@@ -259,9 +257,7 @@ class IfbChildUnlockButton(IfbBaseButton):
 
     async def async_press(self) -> None:
         """Handle button press."""
-        if not (self.progress and self.progress.is_running):
-            raise HomeAssistantError("Child Lock can only be disengaged while a wash cycle is running.")
-        _LOGGER.warning("Sending Child Unlock command to %s", self.mac)
+        _LOGGER.info("Sending Child Unlock command to %s", self.mac)
         try:
             await self.client.child_unlock(self.mac, serial=self.device.serial_number)
             await self.coordinator.async_request_refresh()

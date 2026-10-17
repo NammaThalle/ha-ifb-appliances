@@ -550,14 +550,16 @@ class IfbCloudClient:
 
         return device_list
 
-    async def get_device_progress(self, mac: str) -> IfbCycleProgress:
+    async def get_device_progress(self, mac: str, serial: Optional[str] = None) -> IfbCycleProgress:
         """Fetch current telemetry for appliance."""
         clean_mac = mac.strip().lower()
         if not MAC_REGEX.match(clean_mac):
             _LOGGER.debug("Invalid MAC address syntax: %s", mac)
             return IfbCycleProgress(mac=clean_mac, is_running=False, state=MachineState.STANDBY)
 
-        serial_no = self._device_serials.get(clean_mac)
+        serial_no = serial or self._device_serials.get(clean_mac)
+        if serial_no:
+            self._device_serials[clean_mac] = serial_no
 
         # 0. High-fidelity: Query physical appliance directly via MQTT CMD_READ_STATE
         if self._mqtt_client_id:

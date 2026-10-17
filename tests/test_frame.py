@@ -110,5 +110,36 @@ class TestIfbFrameBuilder(unittest.TestCase):
         self.assertTrue(decoded.door_locked)
 
 
+    def test_dial_programs_catalog_and_profiles(self):
+        """Verify the 14 dial programs and capability profiles match physical hardware."""
+        from ifb_cloud.const import WASHER_DRYER_PROGRAMS, PROGRAM_PROFILES
+        self.assertEqual(len(WASHER_DRYER_PROGRAMS), 14)
+        expected_dial = [
+            (14, "Express 15'"),
+            (13, "Mix/Daily"),
+            (17, "Cotton"),
+            (8, "Synthetic"),
+            (9, "Anti-Allergen"),
+            (10, "Baby Wear"),
+            (11, "Bulky"),
+            (1, "Wash+Dry 2Hr"),
+            (2, "Wash+Dry 4Hr"),
+            (5, "Spin & Dry"),
+            (4, "Refresh"),
+            (16, "PowerSteam®"),
+            (6, "CradleWash®"),
+            (7, "Wool"),
+        ]
+        for code, name in expected_dial:
+            self.assertIn(code, WASHER_DRYER_PROGRAMS)
+            self.assertEqual(WASHER_DRYER_PROGRAMS[code], name)
+            self.assertIn(code, PROGRAM_PROFILES)
+            profile = PROGRAM_PROFILES[code]
+            self.assertIn("temps", profile)
+            self.assertIn("spins", profile)
+            self.assertIn("dry", profile)
+
+
 if __name__ == "__main__":
     unittest.main()
+

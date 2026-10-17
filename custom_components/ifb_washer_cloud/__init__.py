@@ -80,22 +80,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     devices: Dict[str, IfbDevice] = {d.mac: d for d in device_list}
 
-    coordinator = IfbWasherCoordinator(hass, client, devices)
-    await coordinator.async_config_entry_first_refresh()
-
     initial_settings: Dict[str, Dict[str, int]] = {}
     for mac in devices:
-        prog = coordinator.data.get(mac) if coordinator.data else None
-        p_code = prog.program_code if (prog and prog.program_code) else 1
-        p_temp = prog.temp_idx if (prog and prog.temp_idx is not None) else 3
-        p_spin = prog.spin_idx if (prog and prog.spin_idx is not None) else 4
-        p_dry = prog.dry_mode_code if (prog and prog.dry_mode_code is not None) else 0
         initial_settings[mac] = {
-            "program": p_code,
-            "temp": p_temp,
-            "spin": p_spin,
-            "dry": p_dry,
+            "program": 14,
+            "temp": 3,
+            "spin": 4,
+            "dry": 0,
         }
+
+    coordinator = IfbWasherCoordinator(hass, client, devices, settings=initial_settings)
+    await coordinator.async_config_entry_first_refresh()
+
+    # If first refresh received live machine state, synchronize initial settings
+    for mac in devices:
+        prog = coordinator.data.get(mac) if coordinator.data else None
+        if prog and prog.program_code:
+            initial_settings[mac]["program"] = prog.program_code
+            if prog.temp_idx is not None:
+                initial_settings[mac]["temp"] = prog.temp_idx
+            if prog.spin_idx is not None:
+                initial_settings[mac]["spin"] = prog.spin_idx
+            if prog.dry_mode_code is not None:
+                initial_settings[mac]["dry"] = prog.dry_mode_code
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
