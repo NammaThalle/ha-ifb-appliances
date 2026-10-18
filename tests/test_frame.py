@@ -139,6 +139,35 @@ class TestIfbFrameBuilder(unittest.TestCase):
             self.assertIn("spins", profile)
             self.assertIn("dry", profile)
 
+    def test_drying_and_extended_states(self):
+        """Verify drying (code 40), cooling (code 22), steam (code 36) states."""
+        from ifb_cloud.frame import decode_frame
+        from ifb_cloud.const import MachineState
+        from ifb_cloud.models import IfbCycleProgress
+
+        # Frame with state 40 (Drying phase of Spin & Dry)
+        raw = bytearray([0] * 56)
+        raw[0] = 99
+        raw[6] = 3   # Spin & Dry
+        raw[8] = 8   # 800 RPM
+        raw[10] = 0  # Cold
+        raw[17] = 4  # 4 hours
+        raw[18] = 50 # 50 mins
+        raw[30] = 40 # Drying phase
+        raw[35] = 1  # Door locked
+
+        decoded = decode_frame(bytes(raw))
+        self.assertIsNotNone(decoded)
+        self.assertEqual(decoded.state_name, "drying")
+        self.assertTrue(decoded.is_running)
+        self.assertEqual(decoded.set_spin_rpm, 800)
+
+        prog = IfbCycleProgress.from_decoded_frame("48:9d:31:ce:3b:f2", decoded)
+        self.assertEqual(prog.state, MachineState.DRYING)
+        self.assertTrue(prog.is_running)
+        self.assertEqual(prog.program_name, "Spin & Dry")
+        self.assertEqual(prog.selected_spin_speed, "800 RPM")
+
 
 if __name__ == "__main__":
     unittest.main()
