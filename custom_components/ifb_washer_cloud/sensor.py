@@ -97,6 +97,16 @@ class IfbStateSensor(IfbBaseSensor):
             return "standby"
         return self.progress.state.value
 
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return extra state attributes."""
+        if not self.progress:
+            return {}
+        return {
+            "state_code": (self.progress.raw_data or {}).get("state_code"),
+            "is_running": self.progress.is_running,
+        }
+
 
 class IfbProgramSensor(IfbBaseSensor):
     """Active wash/dry program sensor."""

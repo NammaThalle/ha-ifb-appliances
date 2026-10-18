@@ -72,16 +72,16 @@ WASHER_DRYER_PROGRAMS = {
     14: "Express 15'",
     13: "Mix/Daily",
     17: "Cotton",
-    8: "Synthetic",
-    9: "Anti-Allergen",
-    10: "Baby Wear",
-    11: "Bulky",
+    11: "Synthetic",
+    10: "Anti-Allergen",
+    9: "Baby Wear",
+    8: "Bulky",
     # Right Dial
     1: "Wash+Dry 2Hr",
     2: "Wash+Dry 4Hr",
-    5: "Spin & Dry",
+    3: "Spin & Dry",
     4: "Refresh",
-    16: "PowerSteam®",
+    5: "PowerSteam®",
     6: "CradleWash®",
     7: "Wool",
 }
@@ -108,10 +108,10 @@ WASHING_MACHINE_PROGRAMS = {
 # Default program mapping for washer dryers (with fallback for service/tub clean codes)
 PROGRAM_NAMES = {
     **WASHER_DRYER_PROGRAMS,
-    3: "Cotton Eco",
     12: "Eco Clean",
     15: "Drain",
-    18: "Tub Clean",
+    16: "Tub Clean",
+    18: "Service Clean",
 }
 
 # Program capability profiles defining allowable controls for each cycle
@@ -134,25 +134,25 @@ PROGRAM_PROFILES = {
         "dry": True,
         "steam": True,
     },
-    8: {  # Synthetic
+    11: {  # Synthetic
         "temps": ["Cold", "20°C", "30°C", "40°C", "60°C"],
         "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM"],
         "dry": True,
         "steam": True,
     },
-    9: {  # Anti-Allergen
+    10: {  # Anti-Allergen
         "temps": ["40°C", "60°C", "95°C"],
         "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"],
         "dry": True,
         "steam": True,
     },
-    10: {  # Baby Wear
+    9: {  # Baby Wear
         "temps": ["40°C", "60°C", "95°C"],
         "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"],
         "dry": True,
         "steam": True,
     },
-    11: {  # Bulky
+    8: {  # Bulky
         "temps": ["Cold", "20°C", "30°C", "40°C", "60°C"],
         "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM"],
         "dry": True,
@@ -170,7 +170,7 @@ PROGRAM_PROFILES = {
         "dry": True,
         "steam": True,
     },
-    5: {  # Spin & Dry
+    3: {  # Spin & Dry
         "temps": ["Cold"],
         "spins": ["400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM", "1400 RPM"],
         "dry": True,
@@ -182,7 +182,7 @@ PROGRAM_PROFILES = {
         "dry": True,
         "steam": True,
     },
-    16: {  # PowerSteam®
+    5: {  # PowerSteam®
         "temps": ["Cold", "20°C", "30°C", "40°C", "60°C"],
         "spins": ["No Spin", "400 RPM", "600 RPM", "800 RPM", "1000 RPM", "1200 RPM"],
         "dry": True,

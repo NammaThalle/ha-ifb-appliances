@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional, Union
 
 import aiohttp
@@ -85,6 +86,11 @@ class IfbCloudClient:
         self._own_session: bool = session is None
         self._base_url: str = base_url.rstrip("/")
         self._device_serials: Dict[str, str] = {}
+        self._mqtt_listener_client: Any = None
+        self._mqtt_listener_active: bool = False
+        self._phone_app_active_until: float = 0.0
+        self._latest_telemetry: Dict[str, IfbCycleProgress] = {}
+        self._latest_telemetry_time: Dict[str, float] = {}
 
     @property
     def token(self) -> Optional[str]:
@@ -109,9 +115,21 @@ class IfbCloudClient:
         return self._session
 
     async def close(self) -> None:
-        """Close session if internally created."""
+        """Close session if internally created and stop MQTT listener."""
+        self.stop_mqtt_listener()
         if self._own_session and self._session and not self._session.closed:
             await self._session.close()
+
+    def stop_mqtt_listener(self) -> None:
+        """Stop background MQTT listener if active."""
+        if self._mqtt_listener_client is not None:
+            try:
+                self._mqtt_listener_client.loop_stop()
+                self._mqtt_listener_client.disconnect()
+            except Exception:
+                pass
+            self._mqtt_listener_client = None
+        self._mqtt_listener_active = False
 
     def set_auth(self, token: str, user_id: Optional[str] = None) -> None:
         """Set authentication credentials directly."""
@@ -550,18 +568,116 @@ class IfbCloudClient:
 
         return device_list
 
+    def start_mqtt_listener(self, mac: str, serial: Optional[str] = None) -> None:
+        """Start cooperative persistent background MQTT telemetry listener."""
+        clean_mac = mac.strip().lower()
+        if not MAC_REGEX.match(clean_mac) or not self._mqtt_client_id:
+            return
+
+        now = time.time()
+        if now < self._phone_app_active_until:
+            _LOGGER.debug(
+                "Phone app active or backoff in progress (%.0fs remaining). Not starting MQTT listener.",
+                self._phone_app_active_until - now,
+            )
+            return
+
+        if self._mqtt_listener_active and self._mqtt_listener_client is not None:
+            return
+
+        import ssl
+        import paho.mqtt.client as mqtt
+
+        client_id, username, password = self._resolve_mqtt_credentials(clean_mac)
+        mac_oui = clean_mac[:8].lower()
+        host, port = (
+            (MQTT_GAINSPAN_HOST, MQTT_GAINSPAN_PORT)
+            if mac_oui == "20:f8:5e"
+            else (MQTT_ESP_HOST, MQTT_ESP_PORT)
+        )
+
+        try:
+            try:
+                client = mqtt.Client(
+                    mqtt.CallbackAPIVersion.VERSION2,
+                    client_id=client_id,
+                    clean_session=True,
+                )
+            except Exception:
+                client = mqtt.Client(client_id=client_id, clean_session=True)
+
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            client.tls_set_context(ctx)
+            client.username_pw_set(username, password)
+
+            resp_topic = f"Response/{clean_mac}"
+            cmd_topic = f"Command/{clean_mac}"
+
+            def on_connect(c, *args, **kwargs):
+                # In v2: (client, userdata, flags, rc, props)
+                # In v1: (client, userdata, flags, rc)
+                rc = args[2] if len(args) >= 3 else 0
+                is_fail = getattr(rc, "is_failure", None)
+                success = (not is_fail) if is_fail is not None else (rc == 0)
+                if success:
+                    self._mqtt_listener_active = True
+                    c.subscribe(resp_topic, qos=0)
+                    _LOGGER.info(
+                        "[IFB Cloud] Background MQTT listener connected to %s:%s. Subscribed to %s",
+                        host, port, resp_topic,
+                    )
+                    c.publish(cmd_topic, IfbFrameBuilder.read_state(), qos=0, retain=False)
+                else:
+                    self._mqtt_listener_active = False
+
+            def on_message(c, userdata, msg):
+                try:
+                    decoded = decode_frame(msg.payload)
+                    if decoded is not None:
+                        prog = IfbCycleProgress.from_decoded_frame(clean_mac, decoded)
+                        self._latest_telemetry[clean_mac] = prog
+                        self._latest_telemetry_time[clean_mac] = time.time()
+                except Exception as ex:
+                    _LOGGER.debug("Error parsing telemetry frame: %s", ex)
+
+            def on_disconnect(c, *args, **kwargs):
+                # In v2: (client, userdata, disconnect_flags, rc, props)
+                # In v1: (client, userdata, rc)
+                self._mqtt_listener_active = False
+                rc = args[2] if len(args) >= 3 else (args[1] if len(args) >= 2 else 0)
+                rc_val = getattr(rc, "value", rc)
+                if rc_val != 0:
+                    _LOGGER.info(
+                        "[IFB Cloud] MQTT session disconnected (rc=%s). Official mobile app connected; "
+                        "yielding MQTT session for 180 seconds to avoid interrupting user.",
+                        rc,
+                    )
+                    self._phone_app_active_until = time.time() + 180.0
+                try:
+                    c.loop_stop()
+                except Exception:
+                    pass
+
+            client.on_connect = on_connect
+            client.on_message = on_message
+            client.on_disconnect = on_disconnect
+
+            client.connect(host, port, keepalive=15)
+            client.loop_start()
+            self._mqtt_listener_client = client
+        except Exception as err:
+            self._mqtt_listener_active = False
+            _LOGGER.debug("Could not start background MQTT listener: %s", err)
+
     async def get_device_progress(
         self,
         mac: str,
         serial: Optional[str] = None,
         direct_mqtt: bool = False,
     ) -> IfbCycleProgress:
-        """Fetch current telemetry for appliance.
-
-        By default, uses the cloud REST API (v5 device/smart/progress and device/all)
-        to avoid MQTT Client ID collisions with the official MyIFB mobile app.
-        Direct MQTT query via CMD_READ_STATE is only performed when direct_mqtt=True.
-        """
+        """Fetch current telemetry for appliance."""
         clean_mac = mac.strip().lower()
         if not MAC_REGEX.match(clean_mac):
             _LOGGER.debug("Invalid MAC address syntax: %s", mac)
@@ -571,16 +687,50 @@ class IfbCloudClient:
         if serial_no:
             self._device_serials[clean_mac] = serial_no
 
-        # 0. On-demand direct MQTT query (only when explicitly requested, e.g. manual refresh)
-        if direct_mqtt and self._mqtt_client_id:
+        now = time.time()
+
+        # 0. Live telemetry from background MQTT listener
+        if clean_mac in self._latest_telemetry:
+            last_t = self._latest_telemetry_time.get(clean_mac, 0)
+            if (now - last_t < 30.0) or (now < self._phone_app_active_until):
+                return self._latest_telemetry[clean_mac]
+
+        # 1. Background MQTT listener: ensure started if not in backoff
+        if self._mqtt_client_id and now >= self._phone_app_active_until:
+            if not self._mqtt_listener_active:
+                self.start_mqtt_listener(clean_mac, serial=serial_no)
+                start_w = time.time()
+                while time.time() - start_w < 1.5:
+                    if clean_mac in self._latest_telemetry and (time.time() - self._latest_telemetry_time.get(clean_mac, 0) < 5.0):
+                        return self._latest_telemetry[clean_mac]
+                    await asyncio.sleep(0.1)
+            elif self._mqtt_listener_client is not None and (now - self._latest_telemetry_time.get(clean_mac, 0) > 15.0):
+                # Actively request status refresh over existing listener connection
+                try:
+                    self._mqtt_listener_client.publish(
+                        f"Command/{clean_mac}",
+                        IfbFrameBuilder.read_state(),
+                        qos=0,
+                        retain=False,
+                    )
+                except Exception:
+                    pass
+
+            if clean_mac in self._latest_telemetry and (now - self._latest_telemetry_time.get(clean_mac, 0) < 30.0):
+                return self._latest_telemetry[clean_mac]
+
+        # 2. On-demand direct MQTT query if explicitly requested
+        if direct_mqtt and self._mqtt_client_id and now >= self._phone_app_active_until:
             try:
                 live_progress = await self.read_machine_state(clean_mac, serial=serial_no, timeout=2.0)
                 if live_progress is not None:
+                    self._latest_telemetry[clean_mac] = live_progress
+                    self._latest_telemetry_time[clean_mac] = time.time()
                     return live_progress
             except Exception as err:
                 _LOGGER.debug("Direct MQTT state query failed for %s: %s", clean_mac, err)
 
-        # 1. Primary: Query v5 device/smart/progress
+        # 3. Fallback: Query v5 device/smart/progress
         try:
             body = {"serial": serial_no} if serial_no else {}
             resp = await self._post_api(ENDPOINT_GET_DEVICE_PROGRESS, body)
@@ -602,42 +752,15 @@ class IfbCloudClient:
                                 break
                     except Exception:
                         pass
-                    return IfbCycleProgress.from_api_dict(clean_mac, item)
+                    rest_progress = IfbCycleProgress.from_api_dict(clean_mac, item)
+                    if clean_mac in self._latest_telemetry and self._latest_telemetry[clean_mac].is_running and (now - self._latest_telemetry_time.get(clean_mac, 0) < 600.0):
+                        return self._latest_telemetry[clean_mac]
+                    return rest_progress
         except Exception as err:
             _LOGGER.debug("device/smart/progress query error for %s: %s", clean_mac, err)
 
-        # 2. Binary frame via getResponse if supported
-        try:
-            resp = await self._post_api(ENDPOINT_GET_RESPONSE, {"mac": clean_mac})
-            raw_data = resp.get("data") or {}
-            response_field = raw_data.get("response")
-            if response_field:
-                frame_bytes: Optional[bytes] = None
-                if isinstance(response_field, (list, tuple)):
-                    frame_bytes = bytes(int(b) & 0xFF for b in response_field)
-                elif isinstance(response_field, str):
-                    try:
-                        frame_bytes = base64.b64decode(response_field)
-                    except Exception:
-                        pass
-                elif isinstance(response_field, bytes):
-                    frame_bytes = response_field
-
-                if frame_bytes:
-                    decoded = decode_frame(frame_bytes)
-                    if decoded is not None:
-                        return IfbCycleProgress.from_decoded_frame(clean_mac, decoded)
-        except Exception as err:
-            _LOGGER.debug("getResponse binary path failed for %s: %s", clean_mac, err)
-
-        # 3. Fallback: device/all directly
-        try:
-            resp = await self._post_api(ENDPOINT_GET_ALL_DEVICES, {})
-            for d in (resp.get("data") or []):
-                if isinstance(d, dict) and (str(d.get("mac", "")).lower() == clean_mac or d.get("serial") == serial_no):
-                    return IfbCycleProgress.from_api_dict(clean_mac, d)
-        except Exception as err:
-            _LOGGER.debug("device/all fallback failed for %s: %s", clean_mac, err)
+        if clean_mac in self._latest_telemetry:
+            return self._latest_telemetry[clean_mac]
 
         return IfbCycleProgress(mac=clean_mac, is_running=False, state=MachineState.STANDBY)
 
@@ -706,6 +829,23 @@ class IfbCloudClient:
 
         if serial:
             self._device_serials[clean_mac] = serial
+
+        if self._mqtt_listener_active and self._mqtt_listener_client is not None:
+            try:
+                frames = command_bytes if isinstance(command_bytes, list) else [command_bytes]
+                total_bytes = sum(len(f) for f in frames)
+                topic = f"Command/{clean_mac}"
+                for frame in frames:
+                    self._mqtt_listener_client.publish(topic, frame, qos=0, retain=False)
+                    time.sleep(0.1)
+                return {
+                    "status": "success",
+                    "broker": "persistent_listener",
+                    "topic": topic,
+                    "bytes": total_bytes,
+                }
+            except Exception as ex:
+                _LOGGER.debug("Failed to publish on listener client, falling back to on-demand: %s", ex)
 
         def _publish_mqtt() -> Dict[str, Any]:
             import ssl
