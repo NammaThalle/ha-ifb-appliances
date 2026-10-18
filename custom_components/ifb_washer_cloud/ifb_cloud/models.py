@@ -34,6 +34,13 @@ _STATE_CODE_MAP: Dict[int, MachineState] = {
     19: MachineState.SPINNING,   # intermediate spin
     20: MachineState.DELAY_START,
     22: MachineState.DRYING,     # cooling / drying phase
+    35: MachineState.RINSING,    # hot rinse
+    36: MachineState.STEAM,      # steam
+    39: MachineState.RINSING,    # rinse hold child lock
+    40: MachineState.DRYING,     # drying
+    42: MachineState.SOAK,       # warm soak / warm wash
+    50: MachineState.COMPLETE,   # child lock end
+    100: MachineState.COMPLETE,  # program completed
 }
 
 
@@ -181,7 +188,9 @@ class IfbCycleProgress:
         We expose them as integer minutes for the HA sensor (rounding up so the display
         shows "1 min" rather than "0 min" when 30 seconds remain).
         """
-        state = _STATE_CODE_MAP.get(frame.state_code, MachineState.UNKNOWN)
+        state = _STATE_CODE_MAP.get(frame.state_code)
+        if state is None:
+            state = MachineState.MAIN_WASH if frame.is_running else MachineState.STANDBY
         prog_name = PROGRAM_NAMES.get(frame.program_code, f"Program {frame.program_code}")
 
         # Convert seconds → minutes (ceiling so "1 min" shows when <60 s remain)
@@ -195,6 +204,7 @@ class IfbCycleProgress:
             spin_idx = spin_speeds_table.index(spin_rpm)
         else:
             spin_idx = 4
+            spin_rpm = 1000
         spin_label = "No Spin" if spin_rpm == 0 else f"{spin_rpm} RPM"
 
         # Resolve temperature and index

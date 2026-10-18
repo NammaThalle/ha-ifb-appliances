@@ -72,7 +72,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 
-# State code → MachineState enum value
+# State code → MachineState enum value (from TextUtility.getMachineState & AppConstants)
 STATE_MAP = {
     0: "idle",
     1: "standby",
@@ -96,9 +96,16 @@ STATE_MAP = {
     19: "spinning", # intermediate spin
     20: "delay_start",
     22: "drying",   # cooling / drying phase (washer-dryer)
+    35: "rinsing",  # hot rinse
+    36: "steam",    # steam
+    39: "rinsing",  # rinse hold child lock
+    40: "drying",   # drying (washer-dryer main dry phase)
+    42: "soak",     # warm soak / warm wash
+    50: "complete", # child lock end
+    100: "complete", # program completed
 }
 
-RUNNING_STATES = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, 16, 17, 18, 19, 22}
+RUNNING_STATES = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 16, 17, 18, 19, 22, 35, 36, 39, 40, 42}
 
 
 def calculate_checksum(payload: bytes) -> Tuple[int, int]:
@@ -156,24 +163,30 @@ def decode_frame(data: bytes) -> Optional[DecodedFrame]:
 
     state_code = data[30] & 0xFF
     state_name = STATE_MAP.get(state_code, "unknown")
-    is_running = state_code in RUNNING_STATES
     is_paused = state_code == 14
 
     program_code = data[6] & 0xFF
 
-    # Spin speed: if data[8] <= 6 and data[9] == 0, it is an index into SPIN_SPEEDS table
+    # Spin speed: data[8] is setSpeedHigh, data[9] is setSpeedLow (extra rinse)
+    # Checks index into spin_table (0..6) first, then hundreds of RPM (8 -> 800, 10 -> 1000)
     spin_hi = data[8] & 0xFF
     spin_lo = data[9] & 0xFF
     spin_table = [0, 400, 600, 800, 1000, 1200, 1400]
     if spin_hi < len(spin_table) and spin_lo == 0:
         set_spin_rpm = spin_table[spin_hi]
-    else:
+    elif spin_hi * 100 in spin_table:
+        set_spin_rpm = spin_hi * 100
+    elif (spin_hi << 8 | spin_lo) in spin_table:
         set_spin_rpm = (spin_hi << 8) | spin_lo
+    else:
+        set_spin_rpm = 1000
 
-    # Temperature: if data[10] <= 5, it is an index into TEMPERATURES table
+    # Temperature: data[10] is setTemperature in °C or index into table
     temp_raw = data[10] & 0xFF
     temp_table = [0, 20, 30, 40, 60, 95]
-    if temp_raw < len(temp_table):
+    if temp_raw in temp_table:
+        set_temp = temp_raw
+    elif temp_raw < len(temp_table):
         set_temp = temp_table[temp_raw]
     else:
         set_temp = temp_raw
@@ -203,6 +216,10 @@ def decode_frame(data: bytes) -> Optional[DecodedFrame]:
     door_locked = (data[35] & 0xFF) != 0
     child_lock = (data[15] & 0xFF) == 1
     soak_active = (data[14] & 0xFF) != 0
+
+    is_running = (state_code in RUNNING_STATES) or (
+        remaining_seconds > 0 and state_code not in {0, 1, 13, 14, 50, 100} and door_locked
+    )
 
     option1 = data[11] & 0xFF
     prewash_active = bool(option1 & 0x04)   # bit 2
