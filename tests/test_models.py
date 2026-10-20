@@ -75,5 +75,46 @@ class TestIfbModels(unittest.TestCase):
         self.assertEqual(prog.progress_percentage, 0)
 
 
+    def test_from_decoded_frame_extended(self):
+        """Verify from_decoded_frame maps tub clean reminder, water level frequency, and error."""
+        from ifb_cloud.frame import DecodedFrame
+        frame = DecodedFrame(
+            state_code=17,
+            state_name="heating",
+            is_running=True,
+            is_paused=False,
+            program_code=14,
+            remaining_seconds=120,
+            total_seconds=900,
+            progress_pct=86,
+            live_rpm=0,
+            water_temperature_c=40,
+            set_temperature_c=40,
+            set_spin_rpm=1000,
+            door_locked=True,
+            child_lock=False,
+            prewash_active=False,
+            soak_active=False,
+            steam_active=False,
+            extra_rinse_count=0,
+            option1=0,
+            option_enable=0,
+            alarm1=0x80,
+            alarm2=0x00,
+            user_control=0,
+            previous_state=2,
+            dry_mode=0,
+            water_level_frequency=2450,
+            tub_clean_reminder=True,
+            error_code_str="E07",
+            error_description="Door Lock Failure",
+        )
+        prog = IfbCycleProgress.from_decoded_frame("aa:bb:cc:dd:ee:ff", frame)
+        self.assertEqual(prog.water_level_frequency, 2450)
+        self.assertTrue(prog.tub_clean_reminder)
+        self.assertEqual(prog.error_code, "E07")
+        self.assertEqual(prog.error_description, "Door Lock Failure")
+
+
 if __name__ == "__main__":
     unittest.main()

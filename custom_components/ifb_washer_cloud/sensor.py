@@ -47,6 +47,8 @@ async def async_setup_entry(
                 IfbWaterTempSensor(coordinator, device),
                 IfbSelectedSpinSensor(coordinator, device),
                 IfbSelectedDryModeSensor(coordinator, device),
+                IfbWaterLevelFreqSensor(coordinator, device),
+                IfbErrorDescriptionSensor(coordinator, device),
             ]
         )
 
@@ -249,3 +251,48 @@ class IfbSelectedDryModeSensor(IfbBaseSensor):
         if not self.progress:
             return "No Dry"
         return self.progress.selected_dry_mode
+
+
+class IfbWaterLevelFreqSensor(IfbBaseSensor):
+    """Water level pressure sensor oscillation frequency in Hz."""
+
+    _attr_native_unit_of_measurement = "Hz"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:waves-arrow-up"
+
+    def __init__(self, coordinator: IfbWasherCoordinator, device: IfbDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_name = f"{device.name} Water Level Frequency"
+        self._attr_unique_id = f"{device.mac}_water_level_frequency"
+
+    @property
+    def native_value(self) -> int:
+        if not self.progress:
+            return 0
+        return getattr(self.progress, "water_level_frequency", 0)
+
+
+class IfbErrorDescriptionSensor(IfbBaseSensor):
+    """Human-readable active fault / error description sensor."""
+
+    _attr_icon = "mdi:alert-circle-outline"
+
+    def __init__(self, coordinator: IfbWasherCoordinator, device: IfbDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_name = f"{device.name} Error Description"
+        self._attr_unique_id = f"{device.mac}_error_description"
+
+    @property
+    def native_value(self) -> str:
+        if not self.progress:
+            return "None"
+        return getattr(self.progress, "error_description", "None")
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        if not self.progress:
+            return {}
+        return {
+            "error_code": self.progress.error_code,
+        }
+

@@ -44,6 +44,7 @@ async def async_setup_entry(
                 IfbSteamBinarySensor(coordinator, device),
                 IfbPrewashBinarySensor(coordinator, device),
                 IfbSoakBinarySensor(coordinator, device),
+                IfbTubCleanReminderBinarySensor(coordinator, device),
             ]
         )
 
@@ -152,7 +153,10 @@ class IfbProblemBinarySensor(IfbBaseBinarySensor):
     def extra_state_attributes(self) -> Dict[str, str]:
         if not self.progress or not self.progress.error_code:
             return {}
-        return {"error_code": str(self.progress.error_code)}
+        return {
+            "error_code": str(self.progress.error_code),
+            "error_description": getattr(self.progress, "error_description", "None"),
+        }
 
 
 class IfbSteamBinarySensor(IfbBaseBinarySensor):
@@ -201,3 +205,20 @@ class IfbSoakBinarySensor(IfbBaseBinarySensor):
         if not self.progress:
             return False
         return bool(self.progress.soak_active)
+
+
+class IfbTubCleanReminderBinarySensor(IfbBaseBinarySensor):
+    """Binary sensor indicating tub clean cycle is recommended/due."""
+
+    def __init__(self, coordinator: IfbWasherCoordinator, device: IfbDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_name = f"{device.name} Tub Clean Reminder"
+        self._attr_unique_id = f"{device.mac}_tub_clean_reminder"
+        self._attr_icon = "mdi:washing-machine"
+
+    @property
+    def is_on(self) -> bool:
+        if not self.progress:
+            return False
+        return bool(self.progress.tub_clean_reminder)
+

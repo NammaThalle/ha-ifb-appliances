@@ -110,6 +110,60 @@ class TestIfbFrameBuilder(unittest.TestCase):
         self.assertTrue(decoded.door_locked)
 
 
+    def test_error_decoding(self):
+        """Verify error code and human-readable alarm description decoding."""
+        from ifb_cloud.frame import decode_error
+
+        # No alarms
+        code, desc = decode_error(0, 0)
+        self.assertIsNone(code)
+        self.assertEqual(desc, "None")
+
+        # Door Lock Failure (alarm1 bit 7 / 0x80 -> 7)
+        code, desc = decode_error(0x80, 0)
+        self.assertEqual(code, "E07")
+        self.assertEqual(desc, "Door Lock Failure")
+
+        # Water Overflow (alarm1 bit 4 / 0x10 -> 2)
+        code, desc = decode_error(0x10, 0)
+        self.assertEqual(code, "E02")
+        self.assertEqual(desc, "Water Overflow")
+
+        # Unbalanced Drum Load (alarm2 bit 7 / 0x80 -> 15)
+        code, desc = decode_error(0, 0x80)
+        self.assertEqual(code, "E15")
+        self.assertEqual(desc, "Unbalanced Drum Load")
+
+        # High Supply Voltage (>270V) (alarm2 bit 6 / 0x40 -> 14)
+        code, desc = decode_error(0, 0x40)
+        self.assertEqual(code, "E14")
+        self.assertEqual(desc, "High Supply Voltage (>270V)")
+
+        # Low Supply Voltage (<170V) (alarm2 bit 5 / 0x20 -> 13)
+        code, desc = decode_error(0, 0x20)
+        self.assertEqual(code, "E13")
+        self.assertEqual(desc, "Low Supply Voltage (<170V)")
+
+    def test_telemetry_extended_fields(self):
+        """Verify tub clean reminder and water level pressure frequency decoding."""
+        from ifb_cloud.frame import decode_frame
+
+        raw = bytearray([0] * 56)
+        raw[0] = 99
+        raw[6] = 14  # Express 15
+        raw[7] = 0x80  # detergent order bit 7 set -> Tub clean reminder
+        raw[22] = 0x0A  # Water level frequency high byte (2560 + 130 = 2690 Hz)
+        raw[23] = 0x82  # Water level frequency low byte
+        raw[26] = 0x80  # alarm1: Door Lock Failure
+        raw[27] = 0x00
+
+        decoded = decode_frame(bytes(raw))
+        self.assertIsNotNone(decoded)
+        self.assertTrue(decoded.tub_clean_reminder)
+        self.assertEqual(decoded.water_level_frequency, 2690)
+        self.assertEqual(decoded.error_code_str, "E07")
+        self.assertEqual(decoded.error_description, "Door Lock Failure")
+
     def test_dial_programs_catalog_and_profiles(self):
         """Verify the 14 dial programs and capability profiles match physical hardware."""
         from ifb_cloud.const import WASHER_DRYER_PROGRAMS, PROGRAM_PROFILES
