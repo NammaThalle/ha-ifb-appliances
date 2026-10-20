@@ -119,6 +119,53 @@ def calculate_checksum(payload: bytes) -> Tuple[int, int]:
     return s1, s2
 
 
+def decode_error(alarm1: int, alarm2: int) -> Tuple[Optional[str], str]:
+    """Decode alarm1 and alarm2 bytes into error code and human-readable description.
+    
+    Reverse-engineered from com.sqt_smartapp.ifb_remote.bluetooth.HexParser.
+    """
+    if not alarm1 and not alarm2:
+        return None, "None"
+
+    errors = []
+    if alarm1 & 0x40:
+        errors.append((3, "Pressure Switch Failure"))
+    if (alarm2 & 0x40) and not (alarm1 & 0x20):
+        errors.append((14, "High Supply Voltage (>270V)"))
+    if (alarm2 & 0x20) and not (alarm1 & 0x20):
+        errors.append((13, "Low Supply Voltage (<170V)"))
+    if alarm1 & 0x80:
+        errors.append((7, "Door Lock Failure"))
+    if alarm1 & 0x20:
+        errors.append((6, "Overheat Protection"))
+    if alarm1 & 0x10:
+        errors.append((2, "Water Overflow"))
+    if alarm2 & 0x10:
+        errors.append((12, "Drain Pump Failure"))
+    if alarm1 & 0x08:
+        errors.append((4, "Motor Drive Failure"))
+    if alarm2 & 0x01:
+        errors.append((8, "No Water Supply"))
+    if alarm2 & 0x02:
+        errors.append((9, "Low Water Pressure"))
+    if alarm1 & 0x01:
+        errors.append((1, "Door Unlocked"))
+    if alarm2 & 0x80:
+        errors.append((15, "Unbalanced Drum Load"))
+    if alarm1 & 0x02:
+        errors.append((5, "Triac Short Circuit"))
+    if alarm2 & 0x08:
+        errors.append((11, "NTC Temperature Sensor Fault"))
+    if alarm2 & 0x04:
+        errors.append((10, "Heater Element Fault"))
+
+    if errors:
+        code_num, desc = errors[0]
+        return f"E{code_num:02d}", desc
+
+    return f"E{alarm1:02X}{alarm2:02X}", f"Alarm {alarm1:02X}:{alarm2:02X}"
+
+
 @dataclass
 class DecodedFrame:
     """Parsed telemetry from a 36+ byte IFB binary response frame."""
@@ -147,7 +194,11 @@ class DecodedFrame:
     user_control: int
     previous_state: int
     dry_mode: int
-    raw: bytes
+    water_level_frequency: int = 0
+    tub_clean_reminder: bool = False
+    error_code_str: Optional[str] = None
+    error_description: str = "None"
+    raw: bytes = b""
 
 
 def decode_frame(data: bytes) -> Optional[DecodedFrame]:
@@ -233,6 +284,12 @@ def decode_frame(data: bytes) -> Optional[DecodedFrame]:
     previous_state = data[34] & 0xFF
     dry_mode = data[28] & 0xFF if len(data) > 28 else 0
 
+    # Extended telemetry fields
+    water_level_frequency = ((data[22] & 0xFF) << 8) | (data[23] & 0xFF)
+    detergent_order = data[7] & 0xFF
+    tub_clean_reminder = bool(detergent_order & 0xC0)
+    err_code_str, err_desc = decode_error(alarm1, alarm2)
+
     return DecodedFrame(
         state_code=state_code,
         state_name=state_name,
@@ -259,6 +316,10 @@ def decode_frame(data: bytes) -> Optional[DecodedFrame]:
         user_control=user_control,
         previous_state=previous_state,
         dry_mode=dry_mode,
+        water_level_frequency=water_level_frequency,
+        tub_clean_reminder=tub_clean_reminder,
+        error_code_str=err_code_str,
+        error_description=err_desc,
         raw=bytes(data),
     )
 

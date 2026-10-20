@@ -110,6 +110,9 @@ class IfbCycleProgress:
     spin_idx: int = 0
     dry_mode_code: int = 0
     error_code: Optional[str] = None
+    error_description: str = "None"
+    water_level_frequency: int = 0
+    tub_clean_reminder: bool = False
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -248,7 +251,10 @@ class IfbCycleProgress:
             soak_active=frame.soak_active,
             steam_active=frame.steam_active,
             extra_rinse_count=frame.extra_rinse_count,
-            error_code=error_code,
+            error_code=frame.error_code_str or error_code,
+            error_description=frame.error_description,
+            water_level_frequency=frame.water_level_frequency,
+            tub_clean_reminder=frame.tub_clean_reminder,
             raw_data={
                 "state_code": frame.state_code,
                 "option1": frame.option1,
@@ -260,5 +266,7 @@ class IfbCycleProgress:
                 "remaining_seconds": frame.remaining_seconds,
                 "total_seconds": frame.total_seconds,
                 "dry_mode": dry_code,
+                "water_level_frequency": frame.water_level_frequency,
+                "tub_clean_reminder": frame.tub_clean_reminder,
             },
         )

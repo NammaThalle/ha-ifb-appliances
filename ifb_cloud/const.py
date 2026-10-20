@@ -240,3 +240,23 @@ TEMPERATURES = [
     "60°C",
     "95°C",
 ]
+
+# Error Code Descriptions (derived from official HexParser bitmask)
+ERROR_DESCRIPTIONS = {
+    1: "Door Unlocked",
+    2: "Water Overflow",
+    3: "Pressure Switch Failure",
+    4: "Motor Drive Failure",
+    5: "Triac Short Circuit",
+    6: "Overheat Protection",
+    7: "Door Lock Failure",
+    8: "No Water Supply",
+    9: "Low Water Pressure",
+    10: "Heater Element Fault",
+    11: "NTC Temperature Sensor Fault",
+    12: "Drain Pump Failure",
+    13: "Low Supply Voltage (<170V)",
+    14: "High Supply Voltage (>270V)",
+    15: "Unbalanced Drum Load",
+}
+
