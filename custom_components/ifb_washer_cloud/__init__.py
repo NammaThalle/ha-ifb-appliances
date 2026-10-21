@@ -18,6 +18,12 @@ from .const import (
     CONF_TOKEN,
     CONF_USER_ID,
     CONF_MQTT_CLIENT_ID,
+    CONF_MQTT_BACKOFF,
+    CONF_SCAN_INTERVAL_RUNNING,
+    CONF_SCAN_INTERVAL_IDLE,
+    DEFAULT_MQTT_BACKOFF,
+    DEFAULT_SCAN_INTERVAL_RUNNING,
+    DEFAULT_SCAN_INTERVAL_IDLE,
     DOMAIN,
     PLATFORMS,
 )
@@ -89,7 +95,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "dry": 0,
         }
 
-    coordinator = IfbWasherCoordinator(hass, client, devices, settings=initial_settings)
+    scan_idle = entry.options.get(CONF_SCAN_INTERVAL_IDLE, DEFAULT_SCAN_INTERVAL_IDLE)
+    scan_running = entry.options.get(CONF_SCAN_INTERVAL_RUNNING, DEFAULT_SCAN_INTERVAL_RUNNING)
+    backoff = entry.options.get(CONF_MQTT_BACKOFF, DEFAULT_MQTT_BACKOFF)
+
+    client.set_phone_app_backoff(backoff)
+
+    coordinator = IfbWasherCoordinator(
+        hass,
+        client,
+        devices,
+        settings=initial_settings,
+        scan_interval_idle=scan_idle,
+        scan_interval_running=scan_running,
+    )
     await coordinator.async_config_entry_first_refresh()
 
     # If first refresh received live machine state, synchronize initial settings
