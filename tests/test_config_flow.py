@@ -84,5 +84,54 @@ class TestIfbConfigFlowValidation(unittest.TestCase):
         self.assertFalse(validate_otp(""))
 
 
+class TestIfbOptionsFlow(unittest.IsolatedAsyncioTestCase):
+    """Test suite for options flow handling."""
+
+    async def test_options_flow_submission(self):
+        """Verify options flow accepts valid backoff and scan intervals."""
+        from custom_components.ifb_washer_cloud.config_flow import IfbWasherOptionsFlow
+        entry = MagicMock()
+        entry.data = {
+            CONF_MAC: "aa:bb:cc:dd:ee:ff",
+            CONF_DEVICE_NAME: "Washer",
+        }
+        entry.options = {}
+
+        flow = IfbWasherOptionsFlow(entry)
+        flow.hass = MagicMock()
+
+        user_input = {
+            CONF_MAC: "11:22:33:44:55:66",
+            CONF_DEVICE_NAME: "Updated Washer",
+            "mqtt_client_id": "test_client",
+            "mqtt_backoff": 240,
+            "scan_interval_running": 4,
+            "scan_interval_idle": 20,
+        }
+        result = await flow.async_step_init(user_input=user_input)
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["mqtt_backoff"], 240)
+        self.assertEqual(result["data"]["scan_interval_running"], 4)
+        self.assertEqual(result["data"]["scan_interval_idle"], 20)
+
+    async def test_options_flow_invalid_mac(self):
+        """Verify options flow rejects invalid MAC format."""
+        from custom_components.ifb_washer_cloud.config_flow import IfbWasherOptionsFlow
+        entry = MagicMock()
+        entry.data = {}
+        entry.options = {}
+
+        flow = IfbWasherOptionsFlow(entry)
+        flow.hass = MagicMock()
+
+        user_input = {
+            CONF_MAC: "not-a-valid-mac",
+            CONF_DEVICE_NAME: "Washer",
+        }
+        result = await flow.async_step_init(user_input=user_input)
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"][CONF_MAC], "invalid_mac")
+
+
 if __name__ == "__main__":
     unittest.main()

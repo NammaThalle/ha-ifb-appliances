@@ -50,6 +50,22 @@ if "homeassistant" not in sys.modules:
     mock_ha_core = MagicMock()
     mock_ha_config_entries = MagicMock()
     mock_ha_config_entries.ConfigEntry = MagicMock
+
+    class MockConfigFlow:
+        def __init_subclass__(cls, domain=None, **kwargs):
+            super().__init_subclass__(**kwargs)
+
+    mock_ha_config_entries.ConfigFlow = MockConfigFlow
+
+    class MockOptionsFlow:
+        def __init__(self, config_entry=None):
+            self.config_entry = config_entry
+        def async_show_form(self, step_id, data_schema=None, errors=None):
+            return {"type": "form", "step_id": step_id, "data_schema": data_schema, "errors": errors or {}}
+        def async_create_entry(self, title, data):
+            return {"type": "create_entry", "title": title, "data": data}
+
+    mock_ha_config_entries.OptionsFlow = MockOptionsFlow
     mock_ha_helpers = MagicMock()
     mock_ha_aiohttp = MagicMock()
 
@@ -73,6 +89,19 @@ if "homeassistant" not in sys.modules:
     mock_button.ButtonEntity = MockCoordinatorEntity
     mock_button.ButtonDeviceClass = MagicMock()
 
+    def mock_async_redact_data(data, to_redact):
+        if isinstance(data, dict):
+            return {
+                k: "**REDACTED**" if k in to_redact else mock_async_redact_data(v, to_redact)
+                for k, v in data.items()
+            }
+        if isinstance(data, list):
+            return [mock_async_redact_data(v, to_redact) for v in data]
+        return data
+
+    mock_diagnostics = MagicMock()
+    mock_diagnostics.async_redact_data = mock_async_redact_data
+
     sys.modules["homeassistant"] = mock_ha
     sys.modules["homeassistant.core"] = mock_ha_core
     sys.modules["homeassistant.config_entries"] = mock_ha_config_entries
@@ -84,3 +113,13 @@ if "homeassistant" not in sys.modules:
     sys.modules["homeassistant.components.binary_sensor"] = mock_binary_sensor
     sys.modules["homeassistant.components.select"] = mock_select
     sys.modules["homeassistant.components.button"] = mock_button
+    sys.modules["homeassistant.components.diagnostics"] = mock_diagnostics
+
+    mock_ha.core = mock_ha_core
+    mock_ha.config_entries = mock_ha_config_entries
+    mock_ha.helpers = mock_ha_helpers
+    mock_ha.components = sys.modules["homeassistant.components"]
+
+if "voluptuous" not in sys.modules:
+    mock_vol = MagicMock()
+    sys.modules["voluptuous"] = mock_vol
