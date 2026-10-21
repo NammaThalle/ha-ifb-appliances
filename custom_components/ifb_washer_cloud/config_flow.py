@@ -24,7 +24,13 @@ from .const import (
     CONF_PHONE,
     CONF_TOKEN,
     CONF_USER_ID,
+    CONF_MQTT_BACKOFF,
+    CONF_SCAN_INTERVAL_RUNNING,
+    CONF_SCAN_INTERVAL_IDLE,
     DEFAULT_CALLING_CODE,
+    DEFAULT_MQTT_BACKOFF,
+    DEFAULT_SCAN_INTERVAL_RUNNING,
+    DEFAULT_SCAN_INTERVAL_IDLE,
     DOMAIN,
 )
 
@@ -280,6 +286,15 @@ class IfbWasherOptionsFlow(config_entries.OptionsFlow):
         current_mqtt_client_id = self._config_entry.options.get(CONF_MQTT_CLIENT_ID) or self._config_entry.data.get(
             CONF_MQTT_CLIENT_ID, ""
         )
+        current_backoff = self._config_entry.options.get(
+            CONF_MQTT_BACKOFF, DEFAULT_MQTT_BACKOFF
+        )
+        current_scan_running = self._config_entry.options.get(
+            CONF_SCAN_INTERVAL_RUNNING, DEFAULT_SCAN_INTERVAL_RUNNING
+        )
+        current_scan_idle = self._config_entry.options.get(
+            CONF_SCAN_INTERVAL_IDLE, DEFAULT_SCAN_INTERVAL_IDLE
+        )
 
         if user_input is not None:
             mac_str = str(user_input.get(CONF_MAC) or "").strip()
@@ -293,6 +308,15 @@ class IfbWasherOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(CONF_MAC, default=current_mac): str,
                 vol.Optional(CONF_DEVICE_NAME, default=current_name): str,
                 vol.Optional(CONF_MQTT_CLIENT_ID, default=current_mqtt_client_id): str,
+                vol.Optional(CONF_MQTT_BACKOFF, default=current_backoff): vol.All(
+                    vol.Coerce(int), vol.Range(min=30, max=600)
+                ),
+                vol.Optional(CONF_SCAN_INTERVAL_RUNNING, default=current_scan_running): vol.All(
+                    vol.Coerce(int), vol.Range(min=2, max=60)
+                ),
+                vol.Optional(CONF_SCAN_INTERVAL_IDLE, default=current_scan_idle): vol.All(
+                    vol.Coerce(int), vol.Range(min=5, max=300)
+                ),
             }
         )
 

@@ -50,7 +50,11 @@
         "description": "Update appliance configuration:",
         "data": {
           "mac": "Washer MAC Address (e.g. 48:9D:31:XX:XX:XX)",
-          "device_name": "Appliance Friendly Name"
+          "device_name": "Appliance Friendly Name",
+          "mqtt_client_id": "MQTT Client ID (optional override)",
+          "mqtt_backoff": "Mobile App MQTT Yield Backoff (seconds)",
+          "scan_interval_running": "Polling Interval While Running (seconds)",
+          "scan_interval_idle": "Polling Interval While Idle (seconds)"
         }
       }
     }

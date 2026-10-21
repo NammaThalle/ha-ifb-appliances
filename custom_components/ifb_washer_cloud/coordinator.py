@@ -37,17 +37,21 @@ class IfbWasherCoordinator(DataUpdateCoordinator[Dict[str, IfbCycleProgress]]):
         client: IfbCloudClient,
         devices: Dict[str, IfbDevice],
         settings: Optional[Dict[str, Dict[str, int]]] = None,
+        scan_interval_idle: int = DEFAULT_SCAN_INTERVAL_IDLE,
+        scan_interval_running: int = DEFAULT_SCAN_INTERVAL_RUNNING,
     ) -> None:
         """Initialize the coordinator."""
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL_IDLE),
+            update_interval=timedelta(seconds=scan_interval_idle),
         )
         self.client = client
         self.devices = devices
         self.settings = settings if settings is not None else {}
+        self.scan_interval_idle = scan_interval_idle
+        self.scan_interval_running = scan_interval_running
         self._is_any_running = False
 
     async def _async_update_data(self) -> Dict[str, IfbCycleProgress]:
@@ -80,7 +84,7 @@ class IfbWasherCoordinator(DataUpdateCoordinator[Dict[str, IfbCycleProgress]]):
         # Poll every 5s while actively washing/drying, relax to 15s when idle.
         if any_running != self._is_any_running:
             self._is_any_running = any_running
-            new_interval = DEFAULT_SCAN_INTERVAL_RUNNING if any_running else DEFAULT_SCAN_INTERVAL_IDLE
+            new_interval = self.scan_interval_running if any_running else self.scan_interval_idle
             self.update_interval = timedelta(seconds=new_interval)
             _LOGGER.debug(
                 "IFB Washer state changed (any_running=%s). Adjusted update interval to %ss",
