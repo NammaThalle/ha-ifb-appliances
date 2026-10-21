@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import re
+import ssl
 import time
 from typing import Any, Dict, List, Optional, Union
 
@@ -89,6 +90,7 @@ class IfbCloudClient:
         self._mqtt_listener_client: Any = None
         self._mqtt_listener_active: bool = False
         self._phone_app_active_until: float = 0.0
+        self._phone_app_backoff: float = 180.0
         self._latest_telemetry: Dict[str, IfbCycleProgress] = {}
         self._latest_telemetry_time: Dict[str, float] = {}
 
@@ -130,6 +132,10 @@ class IfbCloudClient:
                 pass
             self._mqtt_listener_client = None
         self._mqtt_listener_active = False
+
+    def set_phone_app_backoff(self, seconds: float) -> None:
+        """Set backoff duration (in seconds) when official app connects."""
+        self._phone_app_backoff = max(10.0, float(seconds))
 
     def set_auth(self, token: str, user_id: Optional[str] = None) -> None:
         """Set authentication credentials directly."""
@@ -606,7 +612,7 @@ class IfbCloudClient:
             except Exception:
                 client = mqtt.Client(client_id=client_id, clean_session=True)
 
-            ctx = ssl.create_default_context()
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             client.tls_set_context(ctx)
@@ -651,10 +657,11 @@ class IfbCloudClient:
                 if rc_val != 0:
                     _LOGGER.info(
                         "[IFB Cloud] MQTT session disconnected (rc=%s). Official mobile app connected; "
-                        "yielding MQTT session for 180 seconds to avoid interrupting user.",
+                        "yielding MQTT session for %.0f seconds to avoid interrupting user.",
                         rc,
+                        self._phone_app_backoff,
                     )
-                    self._phone_app_active_until = time.time() + 180.0
+                    self._phone_app_active_until = time.time() + self._phone_app_backoff
                 try:
                     c.loop_stop()
                 except Exception:
