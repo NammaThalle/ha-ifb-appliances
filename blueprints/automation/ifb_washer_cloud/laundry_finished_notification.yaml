@@ -1,0 +1,51 @@
+blueprint:
+  name: "IFB Washer - Laundry Finished Notification"
+  description: "Send a mobile push notification when an IFB washing machine or washer-dryer finishes its wash or dry cycle."
+  domain: automation
+  input:
+    washer_running_sensor:
+      name: "Washer Running Sensor"
+      description: "The binary sensor indicating if the machine is actively running (e.g. binary_sensor.ifb_washer_running)."
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              device_class: running
+    notify_device:
+      name: "Notification Device"
+      description: "The mobile app device to receive the completion alert."
+      selector:
+        device:
+          integration: mobile_app
+    notification_title:
+      name: "Notification Title"
+      description: "Title of the push notification."
+      default: "Laundry Complete! 🧺"
+      selector:
+        text:
+    notification_message:
+      name: "Notification Message"
+      description: "Message body sent when cycle finishes."
+      default: "The wash and dry cycle has finished. Please unload your clothes from the drum."
+      selector:
+        text:
+
+trigger:
+  - platform: state
+    entity_id: !input washer_running_sensor
+    from: "on"
+    to: "off"
+
+action:
+  - domain: mobile_app
+    type: notify
+    device_id: !input notify_device
+    title: !input notification_title
+    message: !input notification_message
+    data:
+      tag: "ifb_laundry_finished"
+      group: "laundry-notifications"
+      channel: "Laundry"
+      importance: "high"
+
+mode: restart
