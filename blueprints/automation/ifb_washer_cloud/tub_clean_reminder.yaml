@@ -1,0 +1,46 @@
+blueprint:
+  name: "IFB Washer - Tub Clean Maintenance Alert"
+  description: "Notify homeowners when the IFB washing machine signals that a Tub Clean cycle is recommended."
+  domain: automation
+  input:
+    tub_clean_sensor:
+      name: "Tub Clean Reminder Sensor"
+      description: "Binary sensor indicating tub clean is recommended (e.g. binary_sensor.ifb_washer_tub_clean_reminder)."
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+    notify_device:
+      name: "Notification Device"
+      description: "Mobile app device to receive the maintenance alert."
+      selector:
+        device:
+          integration: mobile_app
+    notification_title:
+      name: "Notification Title"
+      default: "Tub Clean Cycle Recommended 🧼"
+      selector:
+        text:
+    notification_message:
+      name: "Notification Message"
+      default: "Your IFB washing machine has detected detergent residue or reached 40 wash cycles. Please run a Tub Clean cycle with descaling powder."
+      selector:
+        text:
+
+trigger:
+  - platform: state
+    entity_id: !input tub_clean_sensor
+    to: "on"
+
+action:
+  - domain: mobile_app
+    type: notify
+    device_id: !input notify_device
+    title: !input notification_title
+    message: !input notification_message
+    data:
+      tag: "ifb_tub_clean_reminder"
+      group: "appliance-maintenance"
+      channel: "Maintenance"
+
+mode: single

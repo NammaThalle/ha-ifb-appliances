@@ -78,6 +78,23 @@ Built for modern IFB machines equipped with the **Espressif ESP32** cloud module
 
 ---
 
+## Automation Blueprints
+
+Pre-packaged Home Assistant automation blueprints are included in `blueprints/automation/ifb_washer_cloud/`:
+
+| Blueprint | Description | Import |
+|---|---|---|
+| **Laundry Finished Notification** | Sends actionable mobile push notification when cycle completes. | [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FNammaThalle%2Fha-ifb-appliances%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fifb_washer_cloud%2Flaundry_finished_notification.yaml) |
+| **Unattended Laundry Reminder** | Reminds you if clean clothes remain locked in the drum >30 mins after washing. | [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FNammaThalle%2Fha-ifb-appliances%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fifb_washer_cloud%2Funattended_laundry_reminder.yaml) |
+| **Tub Clean Due Alert** | Notifies when machine signals detergent residue or reaches 40 cycles. | [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FNammaThalle%2Fha-ifb-appliances%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fifb_washer_cloud%2Ftub_clean_reminder.yaml) |
+
+To use blueprints:
+1. Copy the YAML files to your Home Assistant `<config>/blueprints/automation/ifb_washer_cloud/` directory, or use the "Import Blueprint" buttons above.
+2. In Home Assistant, go to **Settings** -> **Automations & Scenes** -> **Blueprints**.
+3. Click **Create Automation** next to the desired blueprint and select your washer entity.
+
+---
+
 ## Dashboard Card: Animated Appliance Card
 
 For an animated drum with cycle stages, pair this integration with [`ha-appliance-card`](https://github.com/ADNPolymerase/ha-appliance-card).
