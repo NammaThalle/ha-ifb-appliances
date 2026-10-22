@@ -1,0 +1,71 @@
+blueprint:
+  name: "IFB Washer - Unattended Laundry Reminder"
+  description: "Send a reminder push notification if finished laundry has been sitting in the drum with the door locked for too long."
+  domain: automation
+  input:
+    washer_running_sensor:
+      name: "Washer Running Sensor"
+      description: "Binary sensor indicating if the machine is running."
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              device_class: running
+    door_locked_sensor:
+      name: "Door Locked Sensor"
+      description: "Binary sensor indicating if the machine door remains locked."
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+    reminder_delay_minutes:
+      name: "Reminder Delay (Minutes)"
+      description: "Time to wait after cycle completion before sending reminder alert."
+      default: 30
+      selector:
+        number:
+          min: 5
+          max: 180
+          unit_of_measurement: "min"
+    notify_device:
+      name: "Notification Device"
+      description: "Mobile app device to receive the reminder."
+      selector:
+        device:
+          integration: mobile_app
+    notification_title:
+      name: "Notification Title"
+      default: "Laundry Waiting in Drum ⏳"
+      selector:
+        text:
+    notification_message:
+      name: "Notification Message"
+      default: "Clean clothes have been sitting inside the drum for over 30 minutes. Please unload them to avoid creasing or mildew."
+      selector:
+        text:
+
+trigger:
+  - platform: state
+    entity_id: !input washer_running_sensor
+    from: "on"
+    to: "off"
+    for:
+      minutes: !input reminder_delay_minutes
+
+condition:
+  - condition: state
+    entity_id: !input door_locked_sensor
+    state: "on"
+
+action:
+  - domain: mobile_app
+    type: notify
+    device_id: !input notify_device
+    title: !input notification_title
+    message: !input notification_message
+    data:
+      tag: "ifb_unattended_laundry"
+      group: "laundry-notifications"
+      channel: "Laundry"
+
+mode: restart
