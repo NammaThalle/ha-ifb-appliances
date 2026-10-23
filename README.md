@@ -18,27 +18,33 @@ Built for modern IFB machines equipped with the **Espressif ESP32** cloud module
 
 - **Real-Time Telemetry & Sensors**:
   - Machine State (`standby`, `washing`, `rinsing`, `spinning`, `drying`, `steam`, `paused`, `complete`, `error`)
-  - Active Program Name
+  - Active Program Name (full 14 dial programs with capability profiles)
   - Time Remaining (countdown in minutes)
   - Cycle Progress (0–100%)
   - Motor Speed (RPM)
   - Water Temperature (°C)
+  - Water Level Pressure Frequency (Hz oscillation sensor)
+  - Human-Readable Fault / Error Description (decoded from official APK alarm bitmasks)
   - Configured Spin Speed & Drying Mode
 - **Binary Sensors**:
   - Running State (`binary_sensor.running`)
   - Door Locked (`binary_sensor.door_locked`)
   - Child Lock (`binary_sensor.child_lock`)
-  - Problem / Fault Detection (`binary_sensor.problem` with error codes)
+  - Tub Clean Reminder (`binary_sensor.tub_clean_reminder`)
+  - Problem / Fault Detection (`binary_sensor.problem` with detailed error attributes)
   - Steam / Prewash / Soak active flags
 - **Controls & Selectors**:
-  - Program Selector (Mix/Daily, Cotton, Express 15, Cradle Wash, Wash+Dry, Dry Only, etc.)
+  - Program Selector (Express 15', Mix/Daily, Cotton, Synthetic, Anti-Allergen, Baby Wear, Bulky, Wash+Dry 2Hr, Wash+Dry 4Hr, Spin & Dry, Refresh, PowerSteam®, CradleWash®, Wool)
   - Spin Speed Selector (No Spin up to 1400 RPM)
   - Temperature Selector (Cold up to 95°C)
-  - Drying Mode Selector (Cupboard Dry, Iron Dry, Extra Dry, Timed Dry)
+  - Drying Mode Selector (Cupboard Dry, Iron Dry, Extra Dry, Timed Dry 30-120m)
   - Hardware Buttons: **Start**, **Pause**, **Stop / Power Off**, and **Refresh**
-- **Adaptive Polling Coordinator**:
-  - Automatically increases polling rate to every 5 seconds while an active cycle is in progress.
-  - Relaxes to 15 seconds during standby/idle to save network and cloud resources.
+- **Cooperative MQTT Listener & Options Flow**:
+  - Persistent background MQTT connection for instant sub-second telemetry updates.
+  - Automatic mobile app coexistence: yields MQTT session when the official *My IFB* app connects to eliminate session conflict loops.
+  - User-configurable options for mobile app yield backoff (30–600s) and dynamic running/idle polling frequencies.
+- **Native Diagnostics Support**:
+  - Full Home Assistant Diagnostics export with sensitive tokens, credentials, and hardware IDs redacted.
 - **Robust Authentication**:
   - Supports modern SMS OTP login (standard My IFB mobile flow), password login, or direct Bearer Token entry.
 - **Zero External Dependencies**:
@@ -179,6 +185,32 @@ if __name__ == "__main__":
 
 ---
 
+## Architecture: Cooperative MQTT & Mobile App Coexistence
+
+The IFB IoT cloud broker (`mqttesp.ifbcloud.in:8887`) permits only **one active subscriber per device MAC address** at a time. If two clients connect using the same client credentials, the broker terminates the older connection.
+
+To provide instantaneous telemetry inside Home Assistant without conflicting with the official *My IFB* smartphone app:
+
+1. **Persistent Listener**: Home Assistant establishes a persistent MQTT subscription to receive live 56-byte binary telemetry frames.
+2. **Disconnect Detection**: When the user opens the official *My IFB* app, the app connects to the MQTT broker, causing Home Assistant's session to be cleanly disconnected by the broker.
+3. **Cooperative Yield Backoff**: Upon receiving the broker's disconnect event, Home Assistant immediately enters a backoff period (default 180 seconds, configurable in Options Flow from 30 to 600 seconds) without attempting to reconnect. During this window, Home Assistant relies on cached telemetry and periodic lightweight status checks.
+4. **Seamless Resume**: Once the user closes or finishes interacting with the smartphone app and the backoff window elapses, Home Assistant transparently re-subscribes to MQTT telemetry.
+
+```text
+[IFB Cloud Broker]
+        │
+        ├── Official Mobile App opens ──> Disconnects HA session (rc!=0)
+        │                                        │
+        │                                        ▼
+        │                              [HA enters Backoff]
+        │                              Yields MQTT session for 180s
+        │                              No session thrashing or UI kick
+        │                                        │
+        └── User closes Mobile App ─────> Backoff expires ──> HA re-subscribes
+```
+
+---
+
 ## Troubleshooting & FAQ
 
 <details>
@@ -192,7 +224,39 @@ Some IFB models connect directly to the MQTT cloud bridge without being linked i
 </details>
 
 <details>
-<summary><b>3. Is my local machine IP or MAC address shared publicly?</b></summary>
+<summary><b>3. Why did the My IFB app briefly reload when I opened it?</b></summary>
+Because the IFB broker limits concurrent MQTT subscribers, Home Assistant automatically yields the session the instant your phone connects. If you encounter any brief reloads, ensure you have updated to v1.2.0 or higher, where the cooperative backoff prevents repeated reconnect loops. You can adjust the yield backoff duration under **Configure** in Home Assistant.
+</details>
+
+<details>
+<summary><b>4. What do the error codes (E01–E15) mean?</b></summary>
+The integration automatically parses the machine's internal alarm bitmasks and displays human-readable descriptions under <code>sensor.*_error_description</code>:
+<ul>
+  <li><b>E01</b>: Door Unlocked</li>
+  <li><b>E02</b>: Water Overflow</li>
+  <li><b>E03</b>: Pressure Switch Failure</li>
+  <li><b>E04</b>: Motor Drive Failure</li>
+  <li><b>E05</b>: Triac Short Circuit</li>
+  <li><b>E06</b>: Overheat Protection</li>
+  <li><b>E07</b>: Door Lock Failure</li>
+  <li><b>E08</b>: No Water Supply</li>
+  <li><b>E09</b>: Low Water Pressure</li>
+  <li><b>E10</b>: Heater Element Fault</li>
+  <li><b>E11</b>: NTC Temperature Sensor Fault</li>
+  <li><b>E12</b>: Drain Pump Failure</li>
+  <li><b>E13</b>: Low Supply Voltage (&lt;170V)</li>
+  <li><b>E14</b>: High Supply Voltage (&gt;270V)</li>
+  <li><b>E15</b>: Unbalanced Drum Load</li>
+</ul>
+</details>
+
+<details>
+<summary><b>5. How do I download Diagnostics for troubleshooting?</b></summary>
+Go to <b>Settings</b> -> <b>Devices & Services</b> -> <b>IFB Appliances</b> -> click the three dots on the integration entry -> <b>Download diagnostics</b>. All sensitive credentials, tokens, phone numbers, and hardware MAC addresses are automatically redacted.
+</details>
+
+<details>
+<summary><b>6. Is my local machine IP or MAC address shared publicly?</b></summary>
 No. The integration connects solely from your Home Assistant instance to the IFB cloud endpoints using your own account credentials. No network traffic or telemetry is shared with third parties.
 </details>
 

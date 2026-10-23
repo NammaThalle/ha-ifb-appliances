@@ -149,6 +149,28 @@ class TestIfbIntegrationE2E(unittest.IsolatedAsyncioTestCase):
         await mock_client.send_command("aa:bb:cc:dd:ee:ff", cancel_frame)
         mock_client.send_command.assert_awaited_with("aa:bb:cc:dd:ee:ff", cancel_frame)
 
+    @patch("custom_components.ifb_washer_cloud.IfbCloudClient")
+    async def test_options_wiring_in_setup_entry(self, mock_client_cls):
+        """Verify user options for backoff and polling rates are passed to client and coordinator."""
+        mock_client = MagicMock()
+        mock_client.token = "mock_jwt_token"
+        mock_client.user_id = "9876543210"
+        mock_client.fetch_mqtt_client_id = AsyncMock(return_value="mock-client-id")
+        mock_client_cls.return_value = mock_client
+        mock_client.get_all_devices = AsyncMock(return_value=[])
+
+        self.entry.options = {
+            "mqtt_backoff": 240,
+            "scan_interval_running": 3,
+            "scan_interval_idle": 30,
+        }
+
+        await async_setup_entry(self.hass, self.entry)
+        mock_client.set_phone_app_backoff.assert_called_with(240)
+        coordinator = self.hass.data[DOMAIN][self.entry.entry_id]["coordinator"]
+        self.assertEqual(coordinator.scan_interval_running, 3)
+        self.assertEqual(coordinator.scan_interval_idle, 30)
+
 
 if __name__ == "__main__":
     unittest.main()
